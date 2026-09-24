@@ -1205,7 +1205,7 @@ function Planner({ user, onSignOut }) {
         </div>
 
         <div style=${{ position: 'relative' }}>
-          <button className=${'btn icon round' + (paintOpen ? ' on' : '')} title="Colors" aria-label="Colors" onClick=${() => { setPaintOpen((v) => !v); setGMenu(false); setUserMenu(false); }}><${Ico.paint} /></button>
+          <button className=${'btn icon round paint' + (paintOpen ? ' on' : '')} title="Colors" aria-label="Colors" onClick=${() => { setPaintOpen((v) => !v); setGMenu(false); setUserMenu(false); }}><${Ico.paint} /></button>
           ${paintOpen && html`
             <div className="pop" style=${{ right: 0, top: 42 }}>
               <h4>Drag a color onto a block</h4>

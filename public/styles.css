@@ -312,8 +312,8 @@ button { cursor:pointer; }
 .drawer-bar { display:none; }
 @media (max-width: 760px) {
   :root { --gutter:50px; }
-  .brand b { display:none; }
-  .brand { margin-right:0; }
+  .brand { display:none; }
+  .btn.paint { display:none; }
   .datelabel { font-size:14px; }
   .datelabel small { display:none; }
   .datelabel .long { display:none; }
