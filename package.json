@@ -1,0 +1,18 @@
+{
+  "name": "day-planner",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Day planner with a prioritized to-do sidebar, drag-to-calendar scheduling, per-user accounts and Google Calendar sync.",
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "dev": "node dev/server.js",
+    "test": "node --test",
+    "check": "node --check dev/server.js && node --check public/app.js && for f in lib/*.js api/*.js api/*/*.js; do node --check \"$f\" || exit 1; done && echo syntax ok"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

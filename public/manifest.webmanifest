@@ -1,0 +1,12 @@
+{
+  "name": "Day Planner",
+  "short_name": "Planner",
+  "description": "Prioritized to-do list, drag onto a day timeline, synced everywhere.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a73e8",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
