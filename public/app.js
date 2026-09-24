@@ -427,8 +427,15 @@ function Root() {
     let dead = false;
     store.req('GET', '/api/auth/me').then((r) => { if (!dead) setUser(r.user); }).catch((e) => {
       if (dead) return;
-      if (e.status === 401) setUser(null);
-      else { setUser(null); setNotice(e.offline ? 'You appear to be offline.' : e.message); }
+      setUser(null);
+      if (e.status === 401) {
+        // a Google round trip that landed here without a session
+        const g = new URLSearchParams(window.location.search).get('google');
+        if (g) {
+          setNotice(g === 'connected' ? 'Google Calendar connected. Sign in to continue.' : 'Sign in first, then connect Google Calendar again from the Google menu.');
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } else setNotice(e.offline ? 'You appear to be offline.' : e.message);
     });
     const off = store.onAuthLost(() => setUser(null));
     return () => { dead = true; off(); };

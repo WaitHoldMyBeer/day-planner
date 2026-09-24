@@ -16,8 +16,9 @@ test/            end-to-end API tests against a real Postgres
 ## One-time setup (Vercel)
 
 The Vercel project `day-planner` exists with `AUTH_SECRET`, `INVITE_CODE`, `APP_URL` and
-`GOOGLE_CLIENT_ID` set. Production URL: **https://day-planner-lilac.vercel.app** (also
-https://day-planner-kenan-blairs-projects.vercel.app). State as of 2026-09-24:
+`GOOGLE_CLIENT_ID` set. Production URL: **https://blairplanner.vercel.app** (the older
+`day-planner-lilac.vercel.app` and `day-planner-kenan-blairs-projects.vercel.app` still work).
+State as of 2026-09-24:
 
 1. **Database.** Done: a Neon Postgres store is attached (`DATABASE_URL` and friends). The schema created
    itself on the first request; nothing to migrate by hand.
@@ -31,16 +32,14 @@ https://day-planner-kenan-blairs-projects.vercel.app). State as of 2026-09-24:
 3. **Google Calendar.** Done in Google Cloud project `day-planner-509622`: Calendar API enabled, OAuth
    consent screen "Day Planner" (External, published to production, homepage and privacy URLs set), and a
    Web application client "Day Planner web" with redirect URI
-   `https://day-planner-kenan-blairs-projects.vercel.app/api/google/callback`. The one remaining step is
-   the client secret, which only the account owner should handle:
-   - Google Cloud → Google Auth Platform → **Clients** → "Day Planner web". Copy the client secret shown
-     at creation, or use **Add secret** if that dialog is gone.
-   - Vercel → **Settings → Environment Variables** → add `GOOGLE_CLIENT_SECRET` (Production and Preview),
-     then **Deployments → ⋯ → Redeploy** the latest deployment so the functions pick it up.
+   `https://blairplanner.vercel.app/api/google/callback` (matches `APP_URL`). `GOOGLE_CLIENT_SECRET` is
+   set on Vercel too.
    - The app is not verified by Google, so the first connect shows a "Google hasn't verified this app"
      screen: choose *Advanced → Go to Day Planner (unsafe)*. That is expected for a private app.
-   - If you attach a custom domain later, change `APP_URL` and add that domain's `/api/google/callback` as
-     a second redirect URI on the client.
+   - The OAuth callback always lands on `APP_URL`; the signed-in session and the address you started
+     from travel inside the encrypted `state`, so connecting works from any alias of the app.
+   - If you attach a custom domain later, change `APP_URL`, add that domain's `/api/google/callback` as a
+     redirect URI on the client, and redeploy.
 
 Then open the production URL, **Create account** with the invite code, and add the page to your phone's
 home screen (Share → Add to Home Screen). Send the URL and invite code to anyone who should have their own

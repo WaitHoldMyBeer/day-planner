@@ -8,8 +8,8 @@
 //   GET  events?timeMin&timeMax      events on the primary calendar in that window
 //   POST events {summary,start,end}  create an event
 //   DELETE events?id=...             delete an event
-import { route, body, bad, origin, HttpError } from '../../lib/http.js';
-import { requireUser, currentUser, signState, verifyState } from '../../lib/auth.js';
+import { route, body, bad, origin, requestOrigin, HttpError } from '../../lib/http.js';
+import { requireUser, userBySession, sealState, openState } from '../../lib/auth.js';
 import {
   requireConfig, authUrl, exchangeCode, saveAccount, status, getAccount, setEnabled, disconnect,
   listEvents, createEvent, deleteEvent,
@@ -25,32 +25,36 @@ const handlers = {
     },
   }),
 
+  // The redirect URI registered with Google is fixed (APP_URL). The user may be on another
+  // alias of the app, where the session cookie lives, so the state carries the session and
+  // the origin to return to; the callback trusts the state, not the cookie.
   connect: route({
     GET: async (req, res) => {
       const user = await requireUser(req);
       requireConfig();
       const redirectUri = `${origin(req)}/api/google/callback`;
-      const state = signState({ uid: user.id });
+      const state = sealState({ uid: user.id, sid: user.sid, o: requestOrigin(req) });
       res.redirect(302, authUrl(redirectUri, state));
     },
   }),
 
   callback: route({
     GET: async (req, res) => {
-      const back = (s) => res.redirect(302, `/?google=${s}`);
+      const st = openState(req.query.state);
+      const home = st && typeof st.o === 'string' && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(st.o) ? st.o : '';
+      const back = (s) => res.redirect(302, `${home}/?google=${s}`);
       if (req.query.error) return back('denied');
-      const user = await currentUser(req);
-      if (!user) return back('signedout');
+      if (!st) return back('badstate');
+      const user = await userBySession(st.sid);
+      if (!user || String(user.id) !== String(st.uid)) return back('signedout');
       try { requireConfig(); } catch (e) { return back('notconfigured'); }
-      const state = verifyState(req.query.state);
-      if (!state || String(state.uid) !== String(user.id)) return back('badstate');
       const code = req.query.code;
       if (!code) return back('error');
       try {
         const tokens = await exchangeCode(code, `${origin(req)}/api/google/callback`);
         await saveAccount(user.id, tokens);
       } catch (e) {
-        console.error('[google callback]', e);
+        console.error('[google callback]', e && e.message ? e.message : e);
         return back(e && e.status === 400 ? 'norefresh' : 'error');
       }
       return back('connected');
