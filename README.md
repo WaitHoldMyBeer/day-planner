@@ -15,8 +15,9 @@ test/            end-to-end API tests against a real Postgres
 
 ## One-time setup (Vercel)
 
-The Vercel project `day-planner` already exists with `AUTH_SECRET` and `INVITE_CODE` set. Three things
-need an account only you control:
+The Vercel project `day-planner` already exists with `AUTH_SECRET`, `INVITE_CODE` and `APP_URL` set.
+Production URL: **https://day-planner-lilac.vercel.app** (also
+https://day-planner-kenan-blairs-projects.vercel.app). Three things need an account only you control:
 
 1. **Database.** In the Vercel project open **Storage → Create Database → Neon (Postgres)**, free plan,
    connect it to `day-planner` for all environments. That injects `DATABASE_URL`. The schema creates
@@ -43,12 +44,11 @@ need an account only you control:
      app is in *Testing*. Note: in Testing status Google expires refresh tokens after 7 days, so publish
      the app (**Publish app**) once it works; an unverified app just shows a warning screen the first time.
    - **APIs & Services → Credentials → Create credentials → OAuth client ID**, type *Web application*.
-     Authorized redirect URI: `https://<your production domain>/api/google/callback`
-     (the production domain is shown at the top of the Vercel project; add a second URI for a custom
-     domain if you attach one).
+     Authorized redirect URI: `https://day-planner-kenan-blairs-projects.vercel.app/api/google/callback`
+     (this matches the `APP_URL` already set on the project; if you attach a custom domain, change
+     `APP_URL` and add that domain's `/api/google/callback` here too).
    - In Vercel → **Settings → Environment Variables** add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
-     (Production and Preview), and `APP_URL` = `https://<your production domain>` so the redirect URI
-     is stable. Redeploy.
+     (Production and Preview). Redeploy (Deployments → ⋯ → Redeploy) so the functions pick them up.
 
 Then open the production URL, **Create account** with the invite code, and add the page to your phone's
 home screen (Share → Add to Home Screen). Send the URL and invite code to anyone who should have their own
