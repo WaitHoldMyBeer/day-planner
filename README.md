@@ -15,40 +15,32 @@ test/            end-to-end API tests against a real Postgres
 
 ## One-time setup (Vercel)
 
-The Vercel project `day-planner` already exists with `AUTH_SECRET`, `INVITE_CODE` and `APP_URL` set.
-Production URL: **https://day-planner-lilac.vercel.app** (also
-https://day-planner-kenan-blairs-projects.vercel.app). Three things need an account only you control:
+The Vercel project `day-planner` exists with `AUTH_SECRET`, `INVITE_CODE`, `APP_URL` and
+`GOOGLE_CLIENT_ID` set. Production URL: **https://day-planner-lilac.vercel.app** (also
+https://day-planner-kenan-blairs-projects.vercel.app). State as of 2026-09-24:
 
-1. **Database.** In the Vercel project open **Storage → Create Database → Neon (Postgres)**, free plan,
-   connect it to `day-planner` for all environments. That injects `DATABASE_URL`. The schema creates
+1. **Database.** Done: a Neon Postgres store is attached (`DATABASE_URL` and friends). The schema created
    itself on the first request; nothing to migrate by hand.
 
-2. **Git for CI/CD.** Create an empty private repository on GitHub (for example `WaitHoldMyBeer/day-planner`),
-   then from this folder:
+2. **Git for CI/CD.** Done: the repository is `WaitHoldMyBeer/day-planner` and it is connected to the
+   Vercel project. Every push to `main` deploys to production and every pull request gets a preview URL.
+   GitHub Actions runs the test suite on each push and pull request (`.github/workflows/ci.yml`), so a
+   red check means the deploy that follows carries a failing build. Vercel's Hobby plan allows at most
+   12 serverless functions per deployment; the API is 7 files, so keep related routes in one file.
 
-   ```bash
-   git remote add origin git@github.com:WaitHoldMyBeer/day-planner.git
-   git push -u origin main
-   ```
-
-   In the Vercel project open **Settings → Git → Connect** and pick that repository. From then on every
-   push to `main` deploys to production and every pull request gets a preview URL. GitHub Actions runs
-   the test suite on each push and pull request (`.github/workflows/ci.yml`), so a red check means the
-   deploy that follows carries a failing build.
-
-3. **Google Calendar** (optional, needed only for the Google features).
-   In [Google Cloud console](https://console.cloud.google.com/) create or pick a project, then:
-   - **APIs & Services → Library**: enable **Google Calendar API**.
-   - **APIs & Services → OAuth consent screen**: External, add the Calendar scope
-     `https://www.googleapis.com/auth/calendar.events`, add both Google accounts as test users while the
-     app is in *Testing*. Note: in Testing status Google expires refresh tokens after 7 days, so publish
-     the app (**Publish app**) once it works; an unverified app just shows a warning screen the first time.
-   - **APIs & Services → Credentials → Create credentials → OAuth client ID**, type *Web application*.
-     Authorized redirect URI: `https://day-planner-kenan-blairs-projects.vercel.app/api/google/callback`
-     (this matches the `APP_URL` already set on the project; if you attach a custom domain, change
-     `APP_URL` and add that domain's `/api/google/callback` here too).
-   - In Vercel → **Settings → Environment Variables** add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
-     (Production and Preview). Redeploy (Deployments → ⋯ → Redeploy) so the functions pick them up.
+3. **Google Calendar.** Done in Google Cloud project `day-planner-509622`: Calendar API enabled, OAuth
+   consent screen "Day Planner" (External, published to production, homepage and privacy URLs set), and a
+   Web application client "Day Planner web" with redirect URI
+   `https://day-planner-kenan-blairs-projects.vercel.app/api/google/callback`. The one remaining step is
+   the client secret, which only the account owner should handle:
+   - Google Cloud → Google Auth Platform → **Clients** → "Day Planner web". Copy the client secret shown
+     at creation, or use **Add secret** if that dialog is gone.
+   - Vercel → **Settings → Environment Variables** → add `GOOGLE_CLIENT_SECRET` (Production and Preview),
+     then **Deployments → ⋯ → Redeploy** the latest deployment so the functions pick it up.
+   - The app is not verified by Google, so the first connect shows a "Google hasn't verified this app"
+     screen: choose *Advanced → Go to Day Planner (unsafe)*. That is expected for a private app.
+   - If you attach a custom domain later, change `APP_URL` and add that domain's `/api/google/callback` as
+     a second redirect URI on the client.
 
 Then open the production URL, **Create account** with the invite code, and add the page to your phone's
 home screen (Share → Add to Home Screen). Send the URL and invite code to anyone who should have their own
