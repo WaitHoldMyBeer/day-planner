@@ -56,6 +56,21 @@ planner; each account is separate.
   event and unlocks the block. Deleting the block itself leaves the Google event alone.
 - Only the primary calendar is used. Edits made to a linked block later are not pushed back to Google.
 
+## Claude's suggestions (beta)
+
+Off by default. Account menu → **Beta features** → **Claude's suggestions** adds a second list in the
+sidebar: items a routine on your own computer found in your mail and course sites that are not on your
+to-do list yet, grouped High / Medium / Low, each with its source, due date, and a flag when it looks
+like something you already have. **Add** turns one into a to-do; **Dismiss** hides it; **Brief** shows the
+day's summary, what was checked, and what could not be.
+
+- The planner server never calls Claude and holds no Anthropic credential. The routine runs on the
+  user's machine under that user's own Claude plan and talks to the planner through `routine/bin/bp`.
+- Linking a computer: run `bin/bp pair` in the routine's instance directory. It stores a key locally
+  (mode 600), opens a planner page, and prints a verification code. Choose **Link** only when the page
+  shows the same code. Only the key's SHA-256 hash is stored on the server. Unlink from the account menu.
+- The contract (tables, endpoints, data shapes, upsert rules) is `routine/SPEC.md`.
+
 ## Local development
 
 Needs Node 22 and a Postgres. With Docker:

@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""bp: the only program on this computer that talks to the planner.
+
+    bp pair [--name NAME] [--no-open] [--force]   create a key and open the approval page
+    bp status                                     is this computer linked, is the feature on
+    bp context [--out FILE]                       fetch to-dos, past suggestions, feedback
+    bp report FILE                                send a run's brief and suggestions
+
+The key lives in <instance>/secrets/routine.key (mode 600). Only its SHA-256 hash ever
+reaches the planner during pairing; the key itself is sent only as a bearer token over TLS.
+Standard library only. See routine/SPEC.md for the contract.
+"""
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+VERSION = "1.0"
+EXIT_USAGE, EXIT_NO_KEY, EXIT_REJECTED, EXIT_DISABLED, EXIT_INVALID, EXIT_NETWORK = 2, 3, 4, 5, 6, 7
+
+FINGERPRINT = re.compile(r"^[a-z0-9][a-z0-9:._@-]{2,159}$")
+TAG = re.compile(r"^[a-z0-9-]{1,40}$")
+PRIORITIES = {"high", "medium", "low"}
+SOURCE_KINDS = {"mail", "canvas", "gradescope", "piazza", "calendar", "ucsd", "clickup", "other"}
+COVERAGE = {"ok", "partial", "skipped", "error"}
+
+
+class Fail(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def find_home():
+    env = os.environ.get("BP_HOME")
+    if env:
+        if not os.path.isfile(os.path.join(env, "config.json")):
+            raise Fail(EXIT_USAGE, f"BP_HOME={env} has no config.json")
+        return os.path.abspath(env)
+    d = os.path.abspath(os.getcwd())
+    while True:
+        if os.path.isfile(os.path.join(d, "config.json")) and os.path.isdir(os.path.join(d, "memory")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            raise Fail(EXIT_USAGE, "No routine instance found. Run from the instance directory or set BP_HOME.")
+        d = parent
+
+
+def load_config(home):
+    with open(os.path.join(home, "config.json"), encoding="utf-8") as f:
+        cfg = json.load(f)
+    url = str(cfg.get("planner_url", "")).rstrip("/")
+    local = re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", url)
+    if not (url.startswith("https://") or local):
+        raise Fail(EXIT_USAGE, "config.json: planner_url must be https:// (or http://127.0.0.1 for local testing)")
+    cfg["planner_url"] = url
+    return cfg
+
+
+def key_path(home):
+    return os.path.join(home, "secrets", "routine.key")
+
+
+def read_key(home):
+    p = key_path(home)
+    if not os.path.isfile(p):
+        raise Fail(EXIT_NO_KEY, "This computer is not linked yet. Run: bp pair")
+    mode = os.stat(p).st_mode & 0o777
+    if mode & 0o077:
+        raise Fail(EXIT_NO_KEY, f"{p} is readable by others (mode {oct(mode)}). Fix with: chmod 600 {p}")
+    with open(p, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def call(cfg, key, method, path, body=None):
+    url = cfg["planner_url"] + path
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {
+        "Accept": "application/json",
+        "X-Requested-With": "fetch",
+        "User-Agent": f"blairplanner-routine/{VERSION} (bp; +routine/README.md)",
+    }
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    last = None
+    for attempt in range(2):
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, json.loads(r.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")
+            if e.code == 403 and (e.headers.get("x-vercel-mitigated") or "").lower() == "challenge":
+                raise Fail(EXIT_NETWORK, "The host's bot checkpoint challenged this request (HTTP 403). "
+                                         "Nothing was sent. Wait a few minutes and run again.")
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = {"error": raw[:200] or f"HTTP {e.code}"}
+            return e.code, payload
+        except (urllib.error.URLError, socket.timeout, ConnectionError) as e:
+            last = e
+            if attempt == 0:
+                time.sleep(2)
+    raise Fail(EXIT_NETWORK, f"Could not reach {cfg['planner_url']}: {last}")
+
+
+def expect_ok(status, payload):
+    if status == 200:
+        return payload
+    msg = payload.get("error") or f"HTTP {status}"
+    if status == 401:
+        raise Fail(EXIT_REJECTED, "The planner does not recognise this computer's key. "
+                                  "Approve the pairing link, or run: bp pair --force")
+    if status == 409 and payload.get("code") == "disabled":
+        raise Fail(EXIT_DISABLED, "Claude's suggestions is turned off in the planner.")
+    if status == 400:
+        raise Fail(EXIT_INVALID, f"The planner rejected the data: {msg}")
+    raise Fail(EXIT_NETWORK, f"Planner error ({status}): {msg}")
+
+
+# ---------------------------------------------------------------- validation
+
+def check_suggestion(s, where):
+    errs = []
+    if not isinstance(s, dict):
+        return [f"{where}: not an object"]
+    if not isinstance(s.get("fingerprint"), str) or not FINGERPRINT.match(s["fingerprint"]):
+        errs.append(f"{where}: bad fingerprint {s.get('fingerprint')!r}")
+    if not isinstance(s.get("title"), str) or not s["title"].strip():
+        errs.append(f"{where}: title is required")
+    if s.get("priority") not in PRIORITIES:
+        errs.append(f"{where}: priority must be high, medium or low")
+    src = s.get("source")
+    if not isinstance(src, dict) or src.get("kind") not in SOURCE_KINDS:
+        errs.append(f"{where}: source.kind must be one of {sorted(SOURCE_KINDS)}")
+    else:
+        url = src.get("url")
+        if url is not None and not (isinstance(url, str) and url.startswith("https://")):
+            errs.append(f"{where}: source.url must be https:// or null")
+    dur = s.get("duration")
+    if dur is not None and not (isinstance(dur, (int, float)) and 5 <= dur <= 1440):
+        errs.append(f"{where}: duration must be 5..1440 minutes or null")
+    tag = s.get("tag")
+    if tag is not None and not (isinstance(tag, str) and TAG.match(tag)):
+        errs.append(f"{where}: tag must match [a-z0-9-]{{1,40}} or be null")
+    due = s.get("due")
+    if due is not None and not (isinstance(due, str) and re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", due)):
+        errs.append(f"{where}: due must be ISO 8601 with a time, or null")
+    dup = s.get("duplicateOf")
+    if dup is not None and not (isinstance(dup, dict) and dup.get("confidence") in {"high", "possible"}):
+        errs.append(f"{where}: duplicateOf.confidence must be high or possible")
+    if s.get("addedBy", "routine") not in {"routine", "mentor"}:
+        errs.append(f"{where}: addedBy must be routine or mentor")
+    return errs
+
+
+def check_report(r):
+    errs = []
+    if not isinstance(r, dict):
+        return ["report is not an object"]
+    if not isinstance(r.get("runId"), str) or not r["runId"]:
+        errs.append("runId is required")
+    if not isinstance(r.get("date"), str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", r["date"]):
+        errs.append("date must be YYYY-MM-DD")
+    sug = r.get("suggestions")
+    if not isinstance(sug, list):
+        errs.append("suggestions must be a list")
+        sug = []
+    if len(sug) > 60:
+        errs.append(f"{len(sug)} suggestions; the limit is 60")
+    seen = set()
+    for i, s in enumerate(sug):
+        errs += check_suggestion(s, f"suggestions[{i}]")
+        fp = s.get("fingerprint") if isinstance(s, dict) else None
+        if fp in seen:
+            errs.append(f"suggestions[{i}]: duplicate fingerprint {fp}")
+        seen.add(fp)
+    b = r.get("brief")
+    if not isinstance(b, dict):
+        errs.append("brief must be an object")
+    else:
+        for k in ("high", "medium", "low"):
+            if not isinstance(b.get(k, []), list):
+                errs.append(f"brief.{k} must be a list")
+        for i, c in enumerate(b.get("coverage", []) or []):
+            if not isinstance(c, dict) or c.get("status") not in COVERAGE:
+                errs.append(f"brief.coverage[{i}].status must be one of {sorted(COVERAGE)}")
+    return errs
+
+
+# ------------------------------------------------------------------ commands
+
+def cmd_pair(args):
+    home = find_home()
+    cfg = load_config(home)
+    p = key_path(home)
+    if os.path.exists(p) and not args.force:
+        raise Fail(EXIT_USAGE, "A key already exists. Use `bp status` to check it, or `bp pair --force` to replace it.")
+    os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+    os.chmod(os.path.dirname(p), 0o700)
+    key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(key + "\n")
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    name = re.sub(r"[^A-Za-z0-9 ._-]", "", args.name or socket.gethostname())[:40] or "computer"
+    url = f"{cfg['planner_url']}/?pair={digest}&name={urllib.request.quote(name)}"
+    code = f"{digest[:4]}-{digest[4:8]}".upper()
+    print("Key created and stored in", p)
+    print("Open this page while signed in to the planner:\n")
+    print("  " + url + "\n")
+    print(f"The page shows a verification code. Choose Link only if it reads  {code}")
+    print("A pairing page you did not just ask for, or one showing another code, should be cancelled.\n")
+    if not args.no_open:
+        try:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+    return 0
+
+
+def cmd_status(args):
+    home = find_home()
+    cfg = load_config(home)
+    print("instance :", home)
+    print("planner  :", cfg["planner_url"])
+    try:
+        key = read_key(home)
+    except Fail as e:
+        print("key      : none.", e)
+        return e.code
+    print("key      : present")
+    status, payload = call(cfg, key, "GET", "/api/routine/context")
+    if status == 200:
+        print("linked   : yes")
+        print("feature  : on")
+        print(f"to-dos   : {len(payload.get('todos', []))}, suggestions on record: {len(payload.get('suggestions', []))}")
+        return 0
+    try:
+        expect_ok(status, payload)
+    except Fail as e:
+        print("linked   :", "no" if e.code == EXIT_REJECTED else "yes")
+        print("feature  :", "off" if e.code == EXIT_DISABLED else "unknown")
+        print("note     :", e)
+        return e.code
+    return 0
+
+
+def cmd_context(args):
+    home = find_home()
+    cfg = load_config(home)
+    payload = expect_ok(*call(cfg, read_key(home), "GET", "/api/routine/context"))
+    text = json.dumps(payload, indent=2, ensure_ascii=False)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+        print(f"context written to {args.out}: {len(payload.get('todos', []))} to-dos, "
+              f"{len(payload.get('suggestions', []))} past suggestions")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_report(args):
+    home = find_home()
+    cfg = load_config(home)
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError) as e:
+        raise Fail(EXIT_INVALID, f"Cannot read {args.file}: {e}")
+    errs = check_report(report)
+    if errs:
+        raise Fail(EXIT_INVALID, "Report is not valid:\n  - " + "\n  - ".join(errs[:20]))
+    if args.check:
+        print(f"valid: {len(report['suggestions'])} suggestions")
+        return 0
+    res = expect_ok(*call(cfg, read_key(home), "POST", "/api/routine/report", report))
+    print("reported:", ", ".join(f"{k} {v}" for k, v in res.items() if isinstance(v, int)))
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="bp", description="Planner client for the Claude routine.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("pair", help="create a key and open the approval page")
+    p.add_argument("--name")
+    p.add_argument("--no-open", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_pair)
+    p = sub.add_parser("status", help="show link and feature state")
+    p.set_defaults(fn=cmd_status)
+    p = sub.add_parser("context", help="fetch to-dos and suggestion history")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_context)
+    p = sub.add_parser("report", help="send a run's brief and suggestions")
+    p.add_argument("file")
+    p.add_argument("--check", action="store_true", help="validate only, send nothing")
+    p.set_defaults(fn=cmd_report)
+    args = ap.parse_args(argv)
+    try:
+        return args.fn(args)
+    except Fail as e:
+        print("bp:", e, file=sys.stderr)
+        return e.code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

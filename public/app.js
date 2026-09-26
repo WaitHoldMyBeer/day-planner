@@ -206,6 +206,83 @@ function downloadText(filename, text, mime) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Claude's suggestions (beta): helpers                                */
+/* Everything here comes from a routine on the user's computer, so it  */
+/* is coerced defensively; a malformed field renders as empty, never   */
+/* as a crash.                                                         */
+/* ------------------------------------------------------------------ */
+
+const PRIORITIES = ['high', 'medium', 'low'];
+const PRIO_LABEL = { high: 'High', medium: 'Medium', low: 'Low' };
+const PAIR_PARAMS = ['pair', 'name'];
+const PILL = { ok: 'ok', partial: 'warn', corrected: 'warn', skipped: 'mute', error: 'bad' };
+const EMPTY_ROUTINE = { enabled: false, keys: [], suggestions: [], brief: null };
+
+const txt = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
+const safeUrl = (u) => (typeof u === 'string' && /^https:\/\/\S+$/i.test(u) ? u : null);
+const listOf = (v) => (Array.isArray(v) ? v : []);
+function parseWhen(iso) {
+  if (typeof iso !== 'string' || !iso) return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+const clockLabel = (d) => fmt(d.getHours() * 60 + d.getMinutes());
+// "Tue, Sep 29 · 11:59 PM"
+const whenLabel = (d) => `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${clockLabel(d)}`;
+// time only when it is today, otherwise date and time
+const sinceLabel = (d, now) => (d.toDateString() === now.toDateString() ? clockLabel(d) : whenLabel(d));
+const suggStatus = (s) => (s.status === 'accepted' || s.status === 'dismissed' ? s.status : 'new');
+const suggPrio = (s) => (PRIORITIES.includes(s.priority) ? s.priority : 'low');
+const dueMs = (s) => { const d = parseWhen(s.due); return d ? d.getTime() : Infinity; };
+const normBeta = (b) => ({ ...(b && typeof b === 'object' ? b : {}), suggestions: !!(b && b.suggestions) });
+
+// p.routine may be absent (older server) or partial; always return the full shape.
+function normRoutine(r) {
+  if (!r || typeof r !== 'object') return EMPTY_ROUTINE;
+  return {
+    enabled: !!r.enabled,
+    keys: listOf(r.keys).filter((k) => k && typeof k === 'object' && k.id != null).map((k) => ({ ...k, id: String(k.id) })),
+    suggestions: listOf(r.suggestions).filter((s) => s && typeof s === 'object' && typeof s.fingerprint === 'string' && s.fingerprint),
+    brief: r.brief && typeof r.brief === 'object' ? r.brief : null,
+  };
+}
+function withSuggestion(r, row) {
+  const list = r.suggestions.slice();
+  const i = list.findIndex((x) => x.fingerprint === row.fingerprint);
+  if (i >= 0) list[i] = row; else list.push(row);
+  return { ...r, suggestions: list };
+}
+// Local mutations are optimistic. ops.sugg / ops.keys hold the local version of every row a
+// mutation touched, with `settled` = the ops.seq value stamped when the server acknowledged it.
+// A poll carries the ops.seq it started at: rows still in flight, or settled after the poll
+// started, keep their local version; once a poll that started after the ack arrives, the
+// server is trusted again and the entry is dropped.
+function mergeRoutine(remote, ops, startedAt) {
+  const current = (e) => e.settled != null && startedAt >= e.settled;
+  const sugg = remote.suggestions.slice();
+  for (const [fp, e] of [...ops.sugg]) {
+    if (current(e)) { ops.sugg.delete(fp); continue; }
+    const i = sugg.findIndex((s) => s.fingerprint === fp);
+    if (i >= 0) sugg[i] = e.row; else sugg.push(e.row);
+  }
+  let keys = remote.keys.slice();
+  for (const [id, e] of [...ops.keys]) {
+    if (current(e)) { ops.keys.delete(id); continue; }
+    keys = keys.filter((k) => k.id !== id);
+    if (e.row) keys.push(e.row);
+  }
+  return { ...remote, suggestions: sugg, keys };
+}
+// Remove only the named query parameters, keeping any others (a pairing link must survive
+// the ?google= cleanup and the sign-in screen).
+function stripParams(names) {
+  const u = new URL(window.location.href);
+  let changed = false;
+  names.forEach((n) => { if (u.searchParams.has(n)) { u.searchParams.delete(n); changed = true; } });
+  if (changed) window.history.replaceState({}, '', u.pathname + u.search + u.hash);
+}
+
+/* ------------------------------------------------------------------ */
 /* store: REST API with an echo-safe write queue                       */
 /* ------------------------------------------------------------------ */
 
@@ -433,7 +510,7 @@ function Root() {
         const g = new URLSearchParams(window.location.search).get('google');
         if (g) {
           setNotice(g === 'connected' ? 'Google Calendar connected. Sign in to continue.' : 'Sign in first, then connect Google Calendar again from the Google menu.');
-          window.history.replaceState({}, '', window.location.pathname);
+          stripParams(['google']);
         }
       } else setNotice(e.offline ? 'You appear to be offline.' : e.message);
     });
@@ -487,6 +564,16 @@ function Planner({ user, onSignOut }) {
   const [now, setNow] = useState(() => new Date());
   const [quickText, setQuickText] = useState('');
 
+  // Claude's suggestions (beta)
+  const [beta, setBeta] = useState({ suggestions: false });
+  const [routine, setRoutineState] = useState(EMPTY_ROUTINE);
+  const [sideTab, setSideTab] = useState('todo');
+  const [briefOpen, setBriefOpen] = useState(false);
+  const [pairAsk, setPairAsk] = useState(null);
+  const [pairBusy, setPairBusy] = useState(false);
+  const [unlinkArm, setUnlinkArm] = useState(null);
+  const [unlinkBusy, setUnlinkBusy] = useState(false);
+
   const scrollRef = useRef(null);
   const gridRef = useRef(null);
   const listRef = useRef(null);
@@ -500,11 +587,19 @@ function Planner({ user, onSignOut }) {
   const settingsRevRef = useRef(null);
   const toastTimer = useRef(null);
   const blockModalRef = useRef(null);
+  // the whole settings document as last seen or written; every write sends all of it
+  const settingsRef = useRef({ colors: DEFAULT_COLORS, beta: { suggestions: false } });
+  const routineRef = useRef(EMPTY_ROUTINE);
+  const routineOps = useRef({ seq: 0, sugg: new Map(), keys: new Map() });
+  const pairAskRef = useRef(null);
+  const pollNowRef = useRef(() => {});
   dateRef.current = dateStr;
   blockModalRef.current = blockModal;
+  pairAskRef.current = pairAsk;
 
   const setBlocks = useCallback((b) => { blocksRef.current = b; setBlocksState(b); }, []);
   const setTodos = useCallback((t) => { todosRef.current = t; setTodosState(t); }, []);
+  const setRoutine = useCallback((r) => { routineRef.current = r; setRoutineState(r); }, []);
 
   const say = useCallback((msg) => {
     setToast(msg);
@@ -522,7 +617,7 @@ function Planner({ user, onSignOut }) {
     dayRevRef.current = day ? day.rev : null;
   };
 
-  const applySync = (p, date, seqAtStart) => {
+  const applySync = (p, date, seqAtStart, routineSeqAtStart) => {
     if (p.google) setGoogle(p.google);
     if (date === dateRef.current) {
       const path = 'days/' + date;
@@ -533,9 +628,15 @@ function Planner({ user, onSignOut }) {
     }
     const sRev = p.settings ? p.settings.rev : null;
     if (p.settings && !store.isOwn(sRev) && !store.inFlight('settings/palette') && !store.hasFailed('settings/palette') && sRev !== settingsRevRef.current) {
-      if (Array.isArray(p.settings.colors) && p.settings.colors.length) setColors(p.settings.colors.slice(0, MAX_COLORS));
+      const { rev: _rev, ...data } = p.settings;
+      const cols = Array.isArray(data.colors) && data.colors.length ? data.colors.slice(0, MAX_COLORS) : settingsRef.current.colors;
+      const b = normBeta(data.beta);
+      settingsRef.current = { ...data, colors: cols, beta: b };
+      setColors(cols);
+      setBeta(b);
       settingsRevRef.current = sRev;
     }
+    setRoutine(mergeRoutine(normRoutine(p.routine), routineOps.current, routineSeqAtStart || 0));
     const remote = new Map((p.todos || []).map((t) => [t.id, t]));
     let cur = todosRef.current.slice();
     let touched = false;
@@ -577,9 +678,10 @@ function Planner({ user, onSignOut }) {
       running = true;
       const date = dateRef.current;
       const seqAt = store.seq();
+      const routineSeqAt = routineOps.current.seq;
       try {
         const p = await store.sync(date);
-        if (!dead) { applyRef.current(p, date, seqAt); if (store.failedCount()) store.retryFailed(); }
+        if (!dead) { applyRef.current(p, date, seqAt, routineSeqAt); if (store.failedCount()) store.retryFailed(); }
       } catch (e) { /* status indicator reports offline / errors */ }
       finally { running = false; if (!dead) schedule(); }
     };
@@ -589,6 +691,7 @@ function Planner({ user, onSignOut }) {
     window.addEventListener('focus', wake);
     window.addEventListener('online', wake);
     const offDrain = store.onDrain(() => schedule(500));
+    pollNowRef.current = () => { if (!dead) schedule(0); };
     return () => {
       dead = true; clearTimeout(timer);
       document.removeEventListener('visibilitychange', wake);
@@ -636,7 +739,22 @@ function Planner({ user, onSignOut }) {
       signedout: 'Sign in first, then connect Google Calendar.',
     };
     say(msgs[g] || 'Could not connect Google Calendar. Try again.');
-    window.history.replaceState({}, '', window.location.pathname);
+    stripParams(['google']);
+  }, [say]);
+
+  // a pairing link from `bin/bp pair` arrives as ?pair=<sha256 hex>&name=<host>; it stays in the
+  // URL (through sign-in if needed) until the user links or cancels
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('pair')) return;
+    const hash = String(params.get('pair') || '').trim().toLowerCase();
+    const name = String(params.get('name') || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      say('That pairing link is not valid. Run bin/bp pair again.');
+      stripParams(PAIR_PARAMS);
+      return;
+    }
+    setPairAsk({ hash, name });
   }, [say]);
 
   /* ---------------- misc effects ---------------- */
@@ -658,6 +776,8 @@ function Planner({ user, onSignOut }) {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       setPaintOpen(false); setExportOpen(false); setTodoModal(null); setGMenu(false); setUserMenu(false); setGPopover(null); setGConfirm(false);
+      setBriefOpen(false); setUnlinkArm(null);
+      if (pairAskRef.current) { setPairAsk(null); stripParams(PAIR_PARAMS); }
       const m = blockModalRef.current;
       if (m) { if (m.mode === 'create') setBlocks(m.revertTo); setBlockModal(null); }
     };
@@ -692,13 +812,21 @@ function Planner({ user, onSignOut }) {
     store.deleteDoc('todos/' + id);
   }, [setTodos]);
 
-  const savePalette = useCallback((cols) => {
+  // Merge a patch into the settings document and write all of it, so colors and beta flags
+  // never overwrite each other. `beta` merges one level deep.
+  const saveSettings = useCallback((patch) => {
+    const cur = settingsRef.current;
+    const next = { ...cur, ...patch };
+    if (patch.beta) next.beta = normBeta({ ...cur.beta, ...patch.beta });
+    settingsRef.current = next;
     const rev = genRev();
     store.rememberRev(rev);
-    setColors(cols);
     settingsRevRef.current = rev;
-    store.writeDoc('settings/palette', { colors: cols, rev });
+    if (patch.colors) setColors(next.colors);
+    if (patch.beta) setBeta(next.beta);
+    store.writeDoc('settings/palette', { ...next, rev });
   }, []);
+  const savePalette = useCallback((cols) => saveSettings({ colors: cols }), [saveSettings]);
 
   const linkTodo = useCallback((todoId, date, blockId) => {
     const t = todosRef.current.find((x) => x.id === todoId);
@@ -731,6 +859,11 @@ function Planner({ user, onSignOut }) {
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const ready = dayLoaded && todosLoaded;
   const gOn = google.connected && google.enabled;
+  const betaOn = !!beta.suggestions;
+  const tab = betaOn ? sideTab : 'todo';
+  const newCount = useMemo(() => routine.suggestions.filter((s) => suggStatus(s) === 'new').length, [routine]);
+  // flag turned off (here or on another device): fall back to the To do tab and close the brief
+  useEffect(() => { if (!betaOn) { setSideTab('todo'); setBriefOpen(false); } }, [betaOn]);
 
   /* ---------------- geometry ---------------- */
 
@@ -1127,6 +1260,95 @@ function Planner({ user, onSignOut }) {
     finally { setGBusy(false); }
   };
 
+  /* ---------------- Claude's suggestions (beta) ---------------- */
+
+  const toggleBeta = (on) => saveSettings({ beta: { suggestions: on } });
+
+  // Optimistic status change on one suggestion; rolled back if the server refuses.
+  const mutateSuggestion = async (s, patch, url, body, failMsg) => {
+    const ops = routineOps.current;
+    const fp = s.fingerprint;
+    const prevRow = routineRef.current.suggestions.find((x) => x.fingerprint === fp) || s;
+    const prevEntry = ops.sugg.get(fp);
+    const entry = { row: { ...prevRow, ...patch, updatedAt: nowIso() }, settled: null };
+    ops.sugg.set(fp, entry);
+    setRoutine(withSuggestion(routineRef.current, entry.row));
+    try {
+      await store.req('POST', url, body);
+      ops.seq++;
+      entry.settled = ops.seq;
+    } catch (e) {
+      if (e.status === 401) return;
+      if (ops.sugg.get(fp) === entry) {
+        if (prevEntry) ops.sugg.set(fp, prevEntry); else ops.sugg.delete(fp);
+        setRoutine(withSuggestion(routineRef.current, prevRow));
+      }
+      say(failMsg ? failMsg(e) : e.message || 'Could not reach the server.');
+    }
+  };
+
+  // Add: a to-do at the bottom of the active list, built the way addTodo builds one, then `accept`.
+  const acceptSuggestion = (s) => {
+    if (!todosLoadedRef.current) return;
+    const title = txt(s.title).trim().slice(0, 500) || 'Untitled';
+    const active = todosRef.current.filter((t) => !t.done);
+    const order = active.length ? Math.max(...active.map((t) => t.order || 0)) + 1000 : 1000;
+    const tag = typeof s.tag === 'string' && /^[a-z0-9-]{1,40}$/.test(s.tag) ? s.tag : null;
+    const dur = Number(s.duration);
+    const duration = Number.isFinite(dur) && dur > 0 ? clamp(Math.round(dur), 5, DAY_MIN) : null;
+    const t = saveTodo({ id: newId('t'), title, tag, duration, color: null, order, done: false, scheduled: [], createdAt: nowIso() });
+    say(`Added "${title}" to your to-do list.`);
+    mutateSuggestion(s, { status: 'accepted', todoId: t.id }, '/api/routine/accept', { fingerprint: s.fingerprint, todoId: t.id },
+      (e) => `The task was added, but Claude's list was not updated: ${e.message}`);
+  };
+  const dismissSuggestion = (s) => mutateSuggestion(s, { status: 'dismissed' }, '/api/routine/dismiss', { fingerprint: s.fingerprint });
+  const restoreSuggestion = (s) => mutateSuggestion(s, { status: 'new' }, '/api/routine/restore', { fingerprint: s.fingerprint });
+
+  const cancelPair = () => { setPairAsk(null); stripParams(PAIR_PARAMS); };
+  const linkRoutine = async () => {
+    const p = pairAsk;
+    if (!p || pairBusy) return;
+    setPairBusy(true);
+    try {
+      const r = await store.req('POST', '/api/routine/pair', { hash: p.hash, name: p.name });
+      const ops = routineOps.current;
+      if (r && r.key && r.key.id != null) {
+        const key = { lastUsedAt: null, ...r.key, id: String(r.key.id) };
+        ops.seq++;
+        ops.keys.set(key.id, { row: key, settled: ops.seq });
+        setRoutine({ ...routineRef.current, keys: [...routineRef.current.keys.filter((k) => k.id !== key.id), key] });
+      }
+      // the server turns the flag on as part of pairing; mirror it locally without a second write
+      if (!settingsRef.current.beta.suggestions) {
+        settingsRef.current = { ...settingsRef.current, beta: normBeta({ ...settingsRef.current.beta, suggestions: true }) };
+        setBeta(settingsRef.current.beta);
+      }
+      stripParams(PAIR_PARAMS);
+      setPairAsk(null);
+      setSideTab('claude');
+      setDrawerOpen(true);
+      say(`Linked ${p.name || 'the computer'}. Its suggestions will appear under Claude.`);
+      pollNowRef.current();
+    } catch (e) {
+      if (e.status !== 401) say(e.message || 'Could not link that computer.');
+    } finally { setPairBusy(false); }
+  };
+
+  const unpairKey = async (k) => {
+    if (unlinkBusy) return;
+    setUnlinkBusy(true);
+    try {
+      await store.req('POST', '/api/routine/unpair', { id: k.id });
+      const ops = routineOps.current;
+      ops.seq++;
+      ops.keys.set(k.id, { row: null, settled: ops.seq });
+      setRoutine({ ...routineRef.current, keys: routineRef.current.keys.filter((x) => x.id !== k.id) });
+      say(`Unlinked ${txt(k.name) || 'that computer'}.`);
+    } catch (e) {
+      if (e.status !== 401) say(e.message || 'Could not unlink that computer.');
+    } finally { setUnlinkBusy(false); setUnlinkArm(null); }
+  };
+
   /* ---------------- palette + export ---------------- */
 
   const addColor = (hex) => {
@@ -1236,12 +1458,35 @@ function Planner({ user, onSignOut }) {
         <button className="btn primary export" title="Export this day" onClick=${() => setExportOpen(true)}><${Ico.export} /><span>Export</span></button>
 
         <div style=${{ position: 'relative' }}>
-          <button className="avatar" title=${user.email} aria-label="Account" onClick=${() => { setUserMenu((v) => !v); setGMenu(false); setPaintOpen(false); }}>${initials}</button>
+          <button className="avatar" title=${user.email} aria-label="Account" onClick=${() => { setUserMenu((v) => !v); setGMenu(false); setPaintOpen(false); setUnlinkArm(null); }}>${initials}</button>
           ${userMenu && html`
-            <div className="pop" style=${{ right: 0, top: 42 }}>
+            <div className=${'pop' + (betaOn ? ' wide' : '')} style=${{ right: 0, top: 42 }}>
               <div className="who"><b>${user.name || 'Signed in'}</b></div>
               <p style=${{ overflowWrap: 'anywhere' }}>${user.email}</p>
               <button className="btn" onClick=${onSignOut}>Sign out</button>
+              <div className="pop-sec">
+                <h4>Beta features</h4>
+                <label className="switch"><input type="checkbox" checked=${betaOn} disabled=${!todosLoaded} onChange=${(e) => toggleBeta(e.target.checked)} /><span>Claude's suggestions</span></label>
+                ${betaOn && html`
+                  <div className="keys">
+                    <div className="keys-h">Linked computers</div>
+                    ${routine.keys.length === 0
+                      ? html`<p>None yet. Run <code>bin/bp pair</code> on your computer; <code>routine/README.md</code> has the setup.</p>`
+                      : routine.keys.map((k) => {
+                        const used = parseWhen(k.lastUsedAt);
+                        return html`
+                          <div className="keyrow" key=${k.id}>
+                            <div className="km">
+                              <div className="kn" title=${txt(k.name)}>${txt(k.name) || 'Unnamed computer'}</div>
+                              <div className="ks">${used ? 'Last used ' + sinceLabel(used, now) : 'Not used yet'}</div>
+                            </div>
+                            ${unlinkArm === k.id
+                              ? html`<button className="btn sm danger" disabled=${unlinkBusy} onClick=${() => unpairKey(k)}>${unlinkBusy ? html`<span className="spin"></span>` : 'Confirm unlink'}</button>`
+                              : html`<button className="btn sm" onClick=${() => setUnlinkArm(k.id)}>Unlink</button>`}
+                          </div>`;
+                      })}
+                  </div>`}
+              </div>
             </div>`}
         </div>
       </header>
@@ -1249,36 +1494,54 @@ function Planner({ user, onSignOut }) {
       <div className="body">
         <aside className=${'side' + (drawerOpen ? '' : ' closed')}>
           <div className="side-head">
-            <h3>To do <span className="count">${activeTodos.length}</span></h3>
-            <form className="addrow" onSubmit=${(e) => { e.preventDefault(); addTodo(quickText); }}>
-              <input id="quickadd" placeholder="Add a task" value=${quickText} autoComplete="off" onChange=${(e) => setQuickText(e.target.value)} disabled=${!ready}
-                onKeyDown=${(e) => { if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); addTodo(quickText, true); } }} />
-              <button type="submit" aria-label="Add task" disabled=${!ready || !quickText.trim()}><${Ico.plus} /></button>
-            </form>
-            <div className="addhint">Shortcuts: <b>45m</b> or <b>1h30</b> sets a length, <b>#event</b> sets a tag. <b>Shift+Enter</b> adds and opens the task.</div>
-          </div>
-          <div className="side-list" ref=${listRef}>
-            ${!todosLoaded && html`<div className="empty-list">Loading tasks…</div>`}
-            ${todosLoaded && activeTodos.length === 0 && html`<div className="empty-list">No tasks yet. Add one above, then drag it onto the calendar or reorder it by priority.</div>`}
-            ${activeTodos.map((t, i) => TodoRow(t, i, activeTodos))}
-            ${insertAt !== null && liftedTodo && InsertLine(listRef, insertAt, liftedTodo)}
-            ${doneTodos.length > 0 && html`
-              <div className="section">
-                <button onClick=${() => setShowDone((v) => !v)} aria-expanded=${showDone}>
-                  <${Ico.chev} style=${{ transform: showDone ? 'none' : 'rotate(-90deg)' }} />Done <span className="count">${doneTodos.length}</span>
+            ${betaOn ? html`
+              <div className="tabs side-tabs" role="tablist" aria-label="Sidebar">
+                <button type="button" role="tab" aria-selected=${tab === 'todo'} className=${tab === 'todo' ? 'on' : ''} onClick=${() => setSideTab('todo')}>
+                  To do <span className="count">${activeTodos.length}</span>
                 </button>
-              </div>`}
-            ${showDone && doneTodos.map((t, i) => TodoRow(t, i, doneTodos))}
+                <button type="button" role="tab" aria-selected=${tab === 'claude'} className=${tab === 'claude' ? 'on' : ''} onClick=${() => setSideTab('claude')}>
+                  Claude <span className=${'count' + (newCount ? ' new' : '')}>${newCount}</span>
+                </button>
+              </div>`
+            : html`<h3>To do <span className="count">${activeTodos.length}</span></h3>`}
+            ${tab === 'todo' && html`
+              <${Fragment}>
+                <form className="addrow" onSubmit=${(e) => { e.preventDefault(); addTodo(quickText); }}>
+                  <input id="quickadd" placeholder="Add a task" value=${quickText} autoComplete="off" onChange=${(e) => setQuickText(e.target.value)} disabled=${!ready}
+                    onKeyDown=${(e) => { if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); addTodo(quickText, true); } }} />
+                  <button type="submit" aria-label="Add task" disabled=${!ready || !quickText.trim()}><${Ico.plus} /></button>
+                </form>
+                <div className="addhint">Shortcuts: <b>45m</b> or <b>1h30</b> sets a length, <b>#event</b> sets a tag. <b>Shift+Enter</b> adds and opens the task.</div>
+              <//>`}
           </div>
-          <div className="quick">
-            <h4>Quick blocks</h4>
-            <div className="row">
-              ${QUICK_BLOCKS.map((b) => html`
-                <div key=${b.key} className="qblock" style=${{ background: b.color }} onPointerDown=${(e) => startSession(e, { kind: 'quick', block: b })}>
-                  <div className="t">${b.label}</div><div className="s">${b.sub}</div>
-                </div>`)}
-            </div>
-          </div>
+          ${tab === 'todo' ? html`
+            <${Fragment}>
+              <div className="side-list" ref=${listRef}>
+                ${!todosLoaded && html`<div className="empty-list">Loading tasks…</div>`}
+                ${todosLoaded && activeTodos.length === 0 && html`<div className="empty-list">No tasks yet. Add one above, then drag it onto the calendar or reorder it by priority.</div>`}
+                ${activeTodos.map((t, i) => TodoRow(t, i, activeTodos))}
+                ${insertAt !== null && liftedTodo && InsertLine(listRef, insertAt, liftedTodo)}
+                ${doneTodos.length > 0 && html`
+                  <div className="section">
+                    <button onClick=${() => setShowDone((v) => !v)} aria-expanded=${showDone}>
+                      <${Ico.chev} style=${{ transform: showDone ? 'none' : 'rotate(-90deg)' }} />Done <span className="count">${doneTodos.length}</span>
+                    </button>
+                  </div>`}
+                ${showDone && doneTodos.map((t, i) => TodoRow(t, i, doneTodos))}
+              </div>
+              <div className="quick">
+                <h4>Quick blocks</h4>
+                <div className="row">
+                  ${QUICK_BLOCKS.map((b) => html`
+                    <div key=${b.key} className="qblock" style=${{ background: b.color }} onPointerDown=${(e) => startSession(e, { kind: 'quick', block: b })}>
+                      <div className="t">${b.label}</div><div className="s">${b.sub}</div>
+                    </div>`)}
+                </div>
+              </div>
+            <//>`
+          : html`
+            <${SuggestionsPanel} routine=${routine} now=${now} canAdd=${todosLoaded}
+              onAdd=${acceptSuggestion} onDismiss=${dismissSuggestion} onRestore=${restoreSuggestion} onBrief=${() => setBriefOpen(true)} />`}
         </aside>
 
         <div className="cal">
@@ -1332,6 +1595,7 @@ function Planner({ user, onSignOut }) {
 
         <div className="drawer-bar">
           <span>To do</span><span className="count">${activeTodos.length}</span>
+          ${betaOn && newCount > 0 && html`<span className="count new">${newCount} from Claude</span>`}
           <button className="btn" onClick=${() => setDrawerOpen((v) => !v)} aria-expanded=${drawerOpen}>${drawerOpen ? 'Hide' : 'Show'} <${Ico.chev} style=${{ transform: drawerOpen ? 'none' : 'rotate(180deg)' }} /></button>
         </div>
       </div>
@@ -1358,6 +1622,10 @@ function Planner({ user, onSignOut }) {
           onDelete=${() => { removeTodo(todoModal.todo.id); setTodoModal(null); }} />`}
 
       ${gPopover && html`<${GoogleEventModal} ev=${gPopover} date=${dateStr} busy=${gBusy} onImport=${() => importEvent(gPopover)} onDelete=${() => deleteGoogleEvent(gPopover)} onClose=${() => setGPopover(null)} />`}
+
+      ${briefOpen && betaOn && routine.brief && html`<${BriefModal} brief=${routine.brief} now=${now} onClose=${() => setBriefOpen(false)} />`}
+
+      ${pairAsk && html`<${PairModal} name=${pairAsk.name} hash=${pairAsk.hash} email=${user.email} busy=${pairBusy} onLink=${linkRoutine} onCancel=${cancelPair} />`}
 
       ${exportOpen && html`
         <div className="scrim" onPointerDown=${() => setExportOpen(false)}>
@@ -1539,6 +1807,198 @@ function TodoModal({ draft, colors, knownTags, tagColor, focus, onChange, onCanc
           <span className="spacer"></span>
           <button className="btn" onClick=${onCancel}>Cancel</button>
           <button className="btn primary" onClick=${onSave}>Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Claude's suggestions (beta): sidebar tab, brief, pairing            */
+/* ------------------------------------------------------------------ */
+
+const PILL_LABEL = { ok: 'OK', partial: 'Partial', skipped: 'Skipped', error: 'Error', corrected: 'Corrected' };
+
+function StatusPill({ status }) {
+  const s = txt(status);
+  return html`<span className=${'pill ' + (PILL[s] || 'mute')}>${PILL_LABEL[s] || s || 'Unknown'}</span>`;
+}
+
+function DueChip({ due, now }) {
+  const d = parseWhen(due);
+  if (!d) return null;
+  const over = d.getTime() < now.getTime();
+  return html`<span className=${'chip' + (over ? ' overdue' : '')} title=${over ? 'Overdue' : 'Due'}><${Ico.cal} /><span className="ell">${whenLabel(d)}</span></span>`;
+}
+
+function SuggestionsPanel({ routine, now, canAdd, onAdd, onDismiss, onRestore, onBrief }) {
+  const [showHandled, setShowHandled] = useState(false);
+  const all = routine.suggestions;
+  const fresh = all.filter((s) => suggStatus(s) === 'new');
+  const handled = all.filter((s) => suggStatus(s) !== 'new').sort((a, b) => txt(b.updatedAt).localeCompare(txt(a.updatedAt)));
+  const groups = PRIORITIES.map((p) => ({
+    p,
+    items: fresh.filter((s) => suggPrio(s) === p).sort((a, b) => (dueMs(a) - dueMs(b)) || txt(a.firstSeen).localeCompare(txt(b.firstSeen))),
+  })).filter((g) => g.items.length > 0);
+  const brief = routine.brief;
+  const linked = routine.keys.length > 0;
+  const ran = brief ? parseWhen(brief.generatedAt) : null;
+  const ranLabel = ran ? sinceLabel(ran, now) : brief && isValidDate(txt(brief.date)) ? shortDate(brief.date) : '';
+
+  const card = (s) => {
+    const src = s.source && typeof s.source === 'object' ? s.source : {};
+    const label = txt(src.label);
+    const url = safeUrl(src.url);
+    const dup = s.duplicateOf && typeof s.duplicateOf === 'object' ? s.duplicateOf : null;
+    const dur = Number(s.duration);
+    return html`
+      <div className="sugg" key=${s.fingerprint}>
+        <div className="title">${txt(s.title) || 'Untitled'}</div>
+        <div className="meta">
+          ${label && html`<span className="chip" title=${label}><span className="ell">${label}</span></span>`}
+          <${DueChip} due=${s.due} now=${now} />
+          ${Number.isFinite(dur) && dur > 0 && html`<span className="chip"><${Ico.clock} />${durLabel(Math.round(dur))}</span>`}
+          ${s.addedBy === 'mentor' && html`<span className="chip mentor" title="Added when the mentor reviewed this run">added by mentor</span>`}
+        </div>
+        ${txt(s.why) && html`<div className="why">${txt(s.why)}</div>`}
+        ${dup && html`<div className="dup">${dup.confidence === 'high' ? 'Likely' : 'Possible'} duplicate of “${txt(dup.title) || 'an existing task'}”</div>`}
+        <div className="acts">
+          ${url && html`<a className="link open" href=${url} target="_blank" rel="noopener noreferrer"><${Ico.ext} />Open</a>`}
+          <span className="push">
+            <button type="button" className="btn sm" onClick=${() => onDismiss(s)}>Dismiss</button>
+            <button type="button" className="btn sm primary" disabled=${!canAdd} onClick=${() => onAdd(s)}>${dup ? 'Add anyway' : 'Add'}</button>
+          </span>
+        </div>
+      </div>`;
+  };
+
+  const hrow = (s) => html`
+    <div className="hrow" key=${s.fingerprint}>
+      <span className="ht" title=${txt(s.title)}>${txt(s.title) || 'Untitled'}</span>
+      ${suggStatus(s) === 'accepted'
+        ? html`<span className="chip added">Added</span>`
+        : html`<${Fragment}><span className="chip">Dismissed</span><button type="button" className="btn sm" onClick=${() => onRestore(s)}>Undo</button><//>`}
+    </div>`;
+
+  return html`
+    <${Fragment}>
+      ${brief && html`
+        <div className="claude-run">
+          <span>Last run${ranLabel ? ' ' + ranLabel : ''}</span><span aria-hidden="true">·</span>
+          <button type="button" className="linkbtn" onClick=${onBrief}>Brief</button>
+        </div>`}
+      <div className="side-list claude-list">
+        ${!linked && html`
+          <div className="claude-note">
+            <p><b>Link a computer to get suggestions.</b> They come from a Claude routine that runs on your own computer under your own Claude plan; this planner never calls Claude itself.</p>
+            <p>Follow the setup guide in <code>routine/README.md</code> in the planner's repository, then run <code>bin/bp pair</code> on that computer and open the link it gives you while signed in here.</p>
+          </div>`}
+        ${linked && !brief && all.length === 0 && html`<div className="empty-list">No run has reported yet. Suggestions appear here after the routine on your computer finishes a run.</div>`}
+        ${groups.map((g) => html`
+          <div className="sgroup" key=${g.p}>
+            <div className="section">${PRIO_LABEL[g.p]} <span className="count">${g.items.length}</span></div>
+            ${g.items.map(card)}
+          </div>`)}
+        ${brief && fresh.length === 0 && html`<div className="empty-list">Nothing new from Claude.</div>`}
+        ${handled.length > 0 && html`
+          <div className="section">
+            <button type="button" onClick=${() => setShowHandled((v) => !v)} aria-expanded=${showHandled}>
+              <${Ico.chev} style=${{ transform: showHandled ? 'none' : 'rotate(-90deg)' }} />Handled <span className="count">${handled.length}</span>
+            </button>
+          </div>`}
+        ${showHandled && handled.length > 0 && html`<div className="hlist">${handled.map(hrow)}</div>`}
+      </div>
+    <//>`;
+}
+
+function BriefModal({ brief, now, onClose }) {
+  const b = brief;
+  const date = txt(b.date);
+  const gen = parseWhen(b.generatedAt);
+  const coverage = listOf(b.coverage).filter((c) => c && typeof c === 'object');
+  const mentor = b.mentor && typeof b.mentor === 'object' ? b.mentor : null;
+  const notes = mentor ? listOf(mentor.notes).map(txt).filter(Boolean) : [];
+  const corrections = mentor ? Number(mentor.corrections) : 0;
+  const questions = listOf(b.questions).map(txt).filter(Boolean);
+  const item = (it, i) => {
+    const src = it.source && typeof it.source === 'object' ? it.source : {};
+    const label = txt(src.label);
+    const url = safeUrl(src.url);
+    return html`
+      <li key=${i + ':' + txt(it.fingerprint)}>
+        <div className="bt">${txt(it.title) || 'Untitled'}</div>
+        ${txt(it.why) && html`<div className="bw">${txt(it.why)}</div>`}
+        ${(parseWhen(it.due) || label) && html`
+          <div className="meta">
+            <${DueChip} due=${it.due} now=${now} />
+            ${label && (url
+              ? html`<a className="chip srclink" href=${url} target="_blank" rel="noopener noreferrer" title=${label}><span className="ell">${label}</span><${Ico.ext} /></a>`
+              : html`<span className="chip" title=${label}><span className="ell">${label}</span></span>`)}
+          </div>`}
+      </li>`;
+  };
+  return html`
+    <div className="scrim" onPointerDown=${onClose}>
+      <div className="modal wide" role="dialog" aria-modal="true" aria-labelledby="brief-h" onPointerDown=${(e) => e.stopPropagation()}>
+        <div className="mhead"><h2 id="brief-h">Brief${isValidDate(date) ? ' · ' + shortDate(date) : ''}</h2><button className="x" onClick=${onClose} aria-label="Close"><${Ico.close} /></button></div>
+        <div className="mbody brief">
+          ${gen && html`<p className="brief-when">Generated ${whenLabel(gen)}</p>`}
+          ${txt(b.summary) && html`<p className="brief-sum">${txt(b.summary)}</p>`}
+          ${PRIORITIES.map((p) => {
+            const items = listOf(b[p]).filter((it) => it && typeof it === 'object');
+            return html`
+              <div className="field" key=${p}><span className="lbl">${PRIO_LABEL[p]} · ${items.length}</span>
+                ${items.length > 0 ? html`<ul className="blist">${items.map(item)}</ul>` : html`<p className="brief-none">Nothing at this level.</p>`}
+              </div>`;
+          })}
+          ${coverage.length > 0 && html`
+            <div className="field"><span className="lbl">Coverage</span>
+              <table className="cov">
+                <tbody>
+                  ${coverage.map((c, i) => html`
+                    <tr key=${i}>
+                      <td className="cs">${txt(c.source)}</td>
+                      <td><${StatusPill} status=${c.status} /></td>
+                      <td className="cd">${txt(c.detail)}</td>
+                    </tr>`)}
+                </tbody>
+              </table>
+            </div>`}
+          ${mentor && html`
+            <div className="field"><span className="lbl">Mentor</span>
+              <div className="mentor-line">
+                <${StatusPill} status=${mentor.status} />
+                ${Number.isFinite(corrections) && corrections > 0 && html`<span>${corrections} correction${corrections === 1 ? '' : 's'}</span>`}
+              </div>
+              ${notes.length > 0 && html`<ul className="plain">${notes.map((n, i) => html`<li key=${i}>${n}</li>`)}</ul>`}
+            </div>`}
+          ${questions.length > 0 && html`
+            <div className="field"><span className="lbl">Questions</span>
+              <ul className="plain">${questions.map((q, i) => html`<li key=${i}>${q}</li>`)}</ul>
+            </div>`}
+        </div>
+        <div className="mfoot"><span className="spacer"></span><button className="btn" onClick=${onClose}>Close</button></div>
+      </div>
+    </div>`;
+}
+
+function PairModal({ name, email, hash, busy, onLink, onCancel }) {
+  // Same code `bp pair` prints in the terminal; a link the user did not just create shows a different one.
+  const code = `${String(hash || '').slice(0, 4)}-${String(hash || '').slice(4, 8)}`.toUpperCase();
+  return html`
+    <div className="scrim" onPointerDown=${onCancel}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pair-h" onPointerDown=${(e) => e.stopPropagation()}>
+        <div className="mhead"><h2 id="pair-h" className="pair-h">Link Claude routine on ${name || 'an unnamed computer'}?</h2><button className="x" onClick=${onCancel} aria-label="Close"><${Ico.close} /></button></div>
+        <div className="mbody">
+          <p className="note">This lets that computer read your to-do list and add suggestions to <b>${email}</b>, so continue only if you just ran <code>bin/bp pair</code> there.</p>
+          <div className="field"><span className="lbl">Verification code</span>
+            <div className="pair-code tnum">${code}</div>
+          </div>
+          <p className="note">It must match the code in your terminal. If you did not ask for this, or the code differs, choose Cancel.</p>
+        </div>
+        <div className="mfoot">
+          <span className="spacer"></span>
+          <button className="btn" onClick=${onCancel}>Cancel</button>
+          <button className="btn primary" disabled=${busy} onClick=${onLink}>${busy ? html`<span className="spin"></span>` : 'Link'}</button>
         </div>
       </div>
     </div>`;
