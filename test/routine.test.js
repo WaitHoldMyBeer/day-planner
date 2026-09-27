@@ -91,7 +91,8 @@ const brief = (over = {}) => ({
   ...over,
 });
 const report = (suggestions, over = {}) => ({ runId: '2026-09-27T07:06', date: '2026-09-27', brief: brief(), suggestions, ...over });
-const zero = { created: 0, updated: 0, unchanged: 0, resurfaced: 0, keptHandled: 0 };
+const zero = { created: 0, updated: 0, unchanged: 0, resurfaced: 0, keptHandled: 0, withdrawn: 0 };
+const wd = (n, reason) => ({ fingerprint: sug(n).fingerprint, reason });
 
 async function routineMember(call = A) {
   const r = await call('GET', '/api/sync?date=2026-09-27');
@@ -222,7 +223,7 @@ test('context returns to-dos and an empty suggestion list', async () => {
     { id: 't1', title: 'Call bank', tag: 'event', duration: 45, done: false, scheduled: [{ date: '2026-09-27', blockId: 'b1' }] },
   ]);
   assert.deepEqual(r.json.suggestions, []);
-  assert.deepEqual(r.json.feedback, { accepted30d: 0, dismissed30d: 0 });
+  assert.deepEqual(r.json.feedback, { accepted30d: 0, dismissed30d: 0, withdrawn30d: 0 });
   assert.equal(r.json.lastBrief, null);
   assert.ok((await routineMember()).keys[0].lastUsedAt, 'last_used_at is updated');
 });
@@ -241,6 +242,7 @@ test('report creates suggestions and a brief', async () => {
   assert.equal(s1.todoId, null);
   assert.equal(s1.dismissedReason, null);
   assert.equal(s1.resurfacedAt, null);
+  assert.equal(s1.withdrawn, null);
   assert.ok(s1.firstSeen && s1.updatedAt && s1.rev);
   assert.ok(!('resurface' in s1));
   assert.equal(m.brief.date, '2026-09-27');
@@ -463,4 +465,182 @@ test('unknown actions, wrong methods and missing markers', async () => {
   assert.equal(r.status, 405);
   r = await routine(keyB, 'POST', '/api/routine/report', report([]), { 'X-Requested-With': '' });
   assert.equal(r.status, 403);
+});
+
+// Withdrawals run as user B, whose history holds only sug(1), so feedback counts are exact.
+
+test('withdraw takes a new suggestion off the list and says why', async () => {
+  let r = await routine(keyB, 'POST', '/api/routine/report', report([21, 22, 23, 24, 25, 26].map((n) => sug(n))));
+  assert.deepEqual(r.json, { ...zero, created: 6 });
+  const fp = sug(21).fingerprint;
+  const before = await suggestionOf(fp, B);
+  assert.equal(before.withdrawn, null);
+
+  r = await routine(keyB, 'POST', '/api/routine/report', report([], { withdraw: [wd(21, '  Submitted on\nGradescope on 28 Sep. ')] }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { ...zero, withdrawn: 1 });
+  const s = await suggestionOf(fp, B);
+  assert.equal(s.status, 'dismissed');
+  assert.deepEqual(Object.keys(s.withdrawn).sort(), ['at', 'reason']);
+  assert.equal(s.withdrawn.reason, 'Submitted on Gradescope on 28 Sep.');
+  assert.ok(Number.isFinite(Date.parse(s.withdrawn.at)));
+  assert.equal(s.dismissedReason, null);
+  assert.equal(s.todoId, null);
+  assert.equal(s.title, before.title);
+  assert.equal(s.firstSeen, before.firstSeen);
+  assert.notEqual(s.rev, before.rev);
+
+  const c = await routine(keyB, 'GET', '/api/routine/context');
+  const h = c.json.suggestions.find((x) => x.fingerprint === fp);
+  assert.equal(h.status, 'dismissed');
+  assert.equal(h.withdrawn, 'Submitted on Gradescope on 28 Sep.');
+  assert.equal(h.dismissedReason, null);
+  assert.equal(c.json.suggestions.find((x) => x.fingerprint === sug(22).fingerprint).withdrawn, null);
+  assert.deepEqual(c.json.feedback, { accepted30d: 0, dismissed30d: 0, withdrawn30d: 1 });
+
+  // Once it is off the list, withdrawing it again changes nothing.
+  r = await routine(keyB, 'POST', '/api/routine/report', report([], { withdraw: [wd(21, 'Still submitted.')] }));
+  assert.deepEqual(r.json, zero);
+  const again = await suggestionOf(fp, B);
+  assert.equal(again.rev, s.rev);
+  assert.equal(again.withdrawn.reason, 'Submitted on Gradescope on 28 Sep.');
+});
+
+test("withdraw leaves accepted, user-dismissed, unknown and other users' suggestions alone", async () => {
+  let r = await B('POST', '/api/routine/accept', { fingerprint: sug(22).fingerprint, todoId: 't22' });
+  assert.equal(r.status, 200);
+  r = await B('POST', '/api/routine/dismiss', { fingerprint: sug(23).fingerprint, reason: 'not mine' });
+  assert.equal(r.status, 200);
+  const s22 = await suggestionOf(sug(22).fingerprint, B);
+  const s23 = await suggestionOf(sug(23).fingerprint, B);
+  const a3 = await suggestionOf(sug(3).fingerprint, A);
+  assert.equal(a3.status, 'new');
+
+  r = await routine(keyB, 'POST', '/api/routine/report', report([], {
+    withdraw: [wd(22, 'Added already.'), wd(23, 'Not relevant.'), { fingerprint: 'canvas:assignment:0:0', reason: 'Gone.' }, wd(3, 'Not yours.')],
+  }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, zero);
+
+  const n22 = await suggestionOf(sug(22).fingerprint, B);
+  assert.equal(n22.status, 'accepted');
+  assert.equal(n22.todoId, 't22');
+  assert.equal(n22.withdrawn, null);
+  assert.equal(n22.rev, s22.rev);
+  const n23 = await suggestionOf(sug(23).fingerprint, B);
+  assert.equal(n23.status, 'dismissed');
+  assert.equal(n23.dismissedReason, 'not mine');
+  assert.equal(n23.withdrawn, null);
+  assert.equal(n23.rev, s23.rev);
+  assert.equal(await suggestionOf('canvas:assignment:0:0', B), undefined);
+  assert.equal((await suggestionOf(sug(3).fingerprint, A)).rev, a3.rev, "B's key cannot withdraw A's suggestion");
+
+  const c = await routine(keyB, 'GET', '/api/routine/context');
+  assert.deepEqual(c.json.feedback, { accepted30d: 1, dismissed30d: 1, withdrawn30d: 1 }, 'a withdrawal is not a dismissal by the user');
+});
+
+test('a bad withdraw list rejects the whole report', async () => {
+  const fp = sug(24).fingerprint;
+  const before = await suggestionOf(fp, B);
+  const bad = async (body) => {
+    const r = await routine(keyB, 'POST', '/api/routine/report', body);
+    assert.equal(r.status, 400, JSON.stringify(r.json));
+    return r.json.error;
+  };
+  const both = report([sug(24, { title: 'Changed upstream' })], { withdraw: [wd(24, 'Cancelled.')], brief: brief({ summary: 'Never stored.' }) });
+  assert.match(await bad(both), new RegExp(`^withdraw\\[0\\]: .*${fp}`));
+  assert.match(await bad(report([], { withdraw: [wd(24, 'Cancelled.'), wd(25, 'Done.'), wd(24, 'Again.')] })), new RegExp(`^withdraw\\[2\\]: .*${fp}.*twice`));
+  assert.match(await bad(report([], { withdraw: [wd(24, '   ')] })), /^withdraw\[0\]: reason/);
+  assert.match(await bad(report([], { withdraw: [{ fingerprint: fp }] })), /^withdraw\[0\]: reason/);
+  assert.match(await bad(report([], { withdraw: [wd(24, 42)] })), /^withdraw\[0\]: reason/);
+  assert.match(await bad(report([], { withdraw: [wd(25, 'Done.'), { fingerprint: 'Canvas HW 4', reason: 'Done.' }] })), /^withdraw\[1\]: fingerprint/);
+  await bad(report([], { withdraw: [fp] }));
+  await bad(report([], { withdraw: { fingerprint: fp, reason: 'Done.' } }));
+  await bad(report([], { withdraw: Array.from({ length: 61 }, (_, i) => wd(100 + i, 'Done.')) }));
+
+  const after = await suggestionOf(fp, B);
+  assert.equal(after.status, 'new');
+  assert.equal(after.title, before.title);
+  assert.equal(after.rev, before.rev);
+  assert.equal(after.withdrawn, null);
+  assert.equal((await suggestionOf(sug(25).fingerprint, B)).status, 'new');
+  assert.notEqual((await routineMember(B)).brief.summary, 'Never stored.');
+
+  // Absent and null both mean nothing to withdraw.
+  const r = await routine(keyB, 'POST', '/api/routine/report', report([], { withdraw: null }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, zero);
+});
+
+test("restore clears withdrawn, and a later dismissal is the user's own", async () => {
+  const fp = sug(21).fingerprint;
+  let r = await B('POST', '/api/routine/restore', { fingerprint: fp });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.suggestion.status, 'new');
+  assert.equal(r.json.suggestion.withdrawn, null);
+  assert.equal((await suggestionOf(fp, B)).withdrawn, null);
+
+  r = await B('POST', '/api/routine/dismiss', { fingerprint: fp, reason: 'done already' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.suggestion.withdrawn, null);
+  assert.equal(r.json.suggestion.dismissedReason, 'done already');
+  const c = await routine(keyB, 'GET', '/api/routine/context');
+  const h = c.json.suggestions.find((x) => x.fingerprint === fp);
+  assert.equal(h.status, 'dismissed');
+  assert.equal(h.withdrawn, null);
+  assert.equal(h.dismissedReason, 'done already');
+  assert.deepEqual(c.json.feedback, { accepted30d: 1, dismissed30d: 2, withdrawn30d: 0 });
+
+  // Accepting a withdrawn item clears it too; a long reason is capped, not rejected.
+  r = await routine(keyB, 'POST', '/api/routine/report', report([], { withdraw: [wd(24, 'r'.repeat(200))] }));
+  assert.deepEqual(r.json, { ...zero, withdrawn: 1 });
+  assert.equal((await suggestionOf(sug(24).fingerprint, B)).withdrawn.reason, 'r'.repeat(160));
+  r = await B('POST', '/api/routine/accept', { fingerprint: sug(24).fingerprint, todoId: 't24' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.suggestion.status, 'accepted');
+  assert.equal(r.json.suggestion.withdrawn, null);
+});
+
+test('a routine cannot set withdrawn through a suggestion', async () => {
+  const forged = { reason: 'forged', at: '2026-09-01T00:00:00Z' };
+  const r = await routine(keyB, 'POST', '/api/routine/report', report([sug(25, { withdrawn: forged }), sug(27, { withdrawn: forged })]));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { ...zero, unchanged: 1, created: 1 }, 'the forged field does not count as a change');
+  for (const n of [25, 27]) {
+    const s = await suggestionOf(sug(n).fingerprint, B);
+    assert.equal(s.status, 'new');
+    assert.equal(s.withdrawn, null);
+  }
+  const c = await routine(keyB, 'GET', '/api/routine/context');
+  assert.equal(c.json.suggestions.find((x) => x.fingerprint === sug(27).fingerprint).withdrawn, null);
+  assert.equal(c.json.feedback.withdrawn30d, 0);
+});
+
+test('a withdrawn suggestion stays handled until it resurfaces, then returns without withdrawn', async () => {
+  const fp = sug(26).fingerprint;
+  let r = await routine(keyB, 'POST', '/api/routine/report', report([], { withdraw: [wd(26, 'Event cancelled.')] }));
+  assert.deepEqual(r.json, { ...zero, withdrawn: 1 });
+  r = await routine(keyB, 'POST', '/api/routine/report', report([sug(26, { title: 'Renamed upstream' })]));
+  assert.deepEqual(r.json, { ...zero, keptHandled: 1 });
+  let s = await suggestionOf(fp, B);
+  assert.equal(s.status, 'dismissed');
+  assert.equal(s.withdrawn.reason, 'Event cancelled.');
+
+  // Rescheduled: back to new; a withdrawal of another item in the same report still applies.
+  r = await routine(keyB, 'POST', '/api/routine/report',
+    report([sug(26, { due: '2026-10-06T23:59:00-07:00', resurface: true })], { withdraw: [wd(27, 'Same as a calendar event.')] }));
+  assert.deepEqual(r.json, { ...zero, resurfaced: 1, withdrawn: 1 });
+  s = await suggestionOf(fp, B);
+  assert.equal(s.status, 'new');
+  assert.equal(s.withdrawn, null);
+  assert.equal(s.due, '2026-10-06T23:59:00-07:00');
+  assert.ok(s.resurfacedAt);
+  const raw = await q(
+    `SELECT s.data ? 'withdrawn' AS has FROM suggestions s JOIN users u ON u.id = s.user_id WHERE u.email = $1 AND s.fingerprint = $2`,
+    [emailB, fp]
+  );
+  assert.equal(raw.rows[0].has, false, 'no stale withdrawn key is left in the row');
+  const c = await routine(keyB, 'GET', '/api/routine/context');
+  assert.equal(c.json.suggestions.find((x) => x.fingerprint === fp).withdrawn, null);
+  assert.equal((await suggestionOf(sug(27).fingerprint, B)).status, 'dismissed');
 });

@@ -41,12 +41,12 @@ briefs(user_id BIGINT FK, date TEXT, data JSONB NOT NULL, updated_at TIMESTAMPTZ
 
 ```json
 {
-  "fingerprint": "canvas:assignment:78035:991234",
+  "fingerprint": "canvas:assignment:12345:991234",
   "title": "MATH 170A HW 1",
   "priority": "high",
   "why": "Due Tue 29 Sep 23:59, not submitted.",
   "source": { "kind": "canvas", "account": null, "label": "Canvas · MATH 170A",
-              "url": "https://canvas.ucsd.edu/courses/78035/assignments/991234", "ref": "991234" },
+              "url": "https://canvas.example.edu/courses/12345/assignments/991234", "ref": "991234" },
   "due": "2026-09-29T23:59:00-07:00",
   "duration": 90,
   "tag": "math170a",
@@ -72,7 +72,12 @@ briefs(user_id BIGINT FK, date TEXT, data JSONB NOT NULL, updated_at TIMESTAMPTZ
   (new due date, new request in the thread). The server then returns it to `new`.
 
 Server-side additions when returned to clients: `status`, `firstSeen`, `updatedAt`, `rev`,
-`todoId` (set on accept), `dismissedReason`, `resurfacedAt`.
+`todoId` (set on accept), `dismissedReason`, `resurfacedAt`, `withdrawn`.
+
+`withdrawn` is `{ "reason": "Submitted on Gradescope on 28 Sep.", "at": "<ISO time>" }` when the
+routine withdrew the item (§4), else null. It is server-owned like the others: a `withdrawn`
+sent inside a suggestion is dropped, and every user transition (accept, dismiss, restore)
+clears it, so a dismissal by the user is never marked withdrawn.
 
 ### Brief
 
@@ -86,7 +91,7 @@ Server-side additions when returned to clients: `status`, `firstSeen`, `updatedA
   "coverage": [ { "source": "School mail", "status": "ok", "detail": "38 threads since last run" },
                 { "source": "Gradescope", "status": "skipped", "detail": "Not signed in in Chrome" } ],
   "mentor": { "status": "corrected", "corrections": 2, "notes": [ "Raised PHYS 2DL prelab to high: due before lab." ] },
-  "questions": [ "kenanblair3@gmail.com is signed in in Chrome. Should it be scanned?" ]
+  "questions": [ "another@example.com is signed in in Chrome. Should it be scanned?" ]
 }
 ```
 
@@ -127,25 +132,29 @@ The server hashes the bearer key with sha256 and looks it up in `routine_keys`; 
 | Method | Path | Result |
 |---|---|---|
 | GET | `/api/routine/context` | see below |
-| POST | `/api/routine/report` | `{created, updated, unchanged, resurfaced, keptHandled}` |
+| POST | `/api/routine/report` | `{created, updated, unchanged, resurfaced, keptHandled, withdrawn}` |
 
 `context` response:
 
 ```json
-{ "enabled": true, "user": { "name": "Kenan" }, "serverTime": "…",
+{ "enabled": true, "user": { "name": "Sam" }, "serverTime": "…",
   "todos": [ { "id": "t1", "title": "…", "tag": "event", "duration": 45, "done": false,
                "scheduled": [ { "date": "2026-09-27", "blockId": "b1" } ] } ],
   "suggestions": [ { "fingerprint": "…", "title": "…", "status": "dismissed", "priority": "low",
                      "source": { "kind": "mail", "label": "…" }, "due": null,
-                     "dismissedReason": "not mine", "updatedAt": "…" } ],
-  "feedback": { "accepted30d": 12, "dismissed30d": 5 },
+                     "dismissedReason": "not mine", "withdrawn": null, "updatedAt": "…" } ],
+  "feedback": { "accepted30d": 12, "dismissed30d": 5, "withdrawn30d": 3 },
   "lastBrief": { "date": "2026-09-26", "runId": "…" } }
 ```
 
 `suggestions` in `context` covers the last 60 days in every status, so the routine knows what
 the user accepted and dismissed. That history is the ground truth the mentor learns from.
+A history item's `withdrawn` is the routine's reason string when the routine withdrew it, else
+null; such an item has status `dismissed` but is not the user's judgement. `dismissed30d`
+counts only dismissals by the user; `withdrawn30d` counts the withdrawn ones it leaves out.
 
-`report` body: `{ runId, date, brief, suggestions: [ … ] }` with at most 60 suggestions.
+`report` body: `{ runId, date, brief, suggestions: [ … ], withdraw: [ … ] }` with at most 60
+suggestions.
 Upsert rule per fingerprint:
 
 | Existing row | Incoming | Effect |
@@ -155,6 +164,26 @@ Upsert rule per fingerprint:
 | `new` | changed content | replace `data` → `updated` |
 | `accepted` / `dismissed` | `resurface: true` | status → `new`, `resurfacedAt` set → `resurfaced` |
 | `accepted` / `dismissed` | otherwise | row untouched → `keptHandled` |
+
+A resurfaced row takes the new content only, so it loses `withdrawn` along with the other
+server fields except `resurfacedAt`.
+
+`withdraw` (optional; absent or null means none) takes items that became moot off the user's
+list: the homework was submitted, the event was cancelled, the date passed.
+
+```json
+"withdraw": [ { "fingerprint": "canvas:assignment:12345:991234", "reason": "Submitted on Gradescope on 28 Sep." } ]
+```
+
+- At most 60 entries. `reason` is required, plain text, at most 160 characters (longer is cut).
+- A fingerprint may appear once in `withdraw`, and not in both `suggestions` and `withdraw` of
+  the same report; either is a `400` and nothing from the report is stored.
+- Applied after the suggestions, in the same transaction. Only a row that is `new` changes:
+  status → `dismissed`, `withdrawn` set, `todoId`/`dismissedReason` cleared → counted
+  `withdrawn`. A row that is `accepted` or `dismissed`, or does not exist, is left untouched
+  and is not an error; the user's own decision always stands.
+- A withdrawn row reported again follows the table above like any `dismissed` row: kept
+  handled unless `resurface: true`.
 
 The brief for `date` is replaced wholesale. A second report on the same day (the mentor's
 corrected one) simply overwrites the first.
@@ -168,7 +197,9 @@ corrected one) simply overwrites the first.
   `source.url`, and buttons **Add** and **Dismiss**. A flagged item shows
   "Possible duplicate of ‹title›" and its buttons read **Add anyway** and **Dismiss**.
   **Add** creates a to-do (title, tag, duration) at the bottom of the list, then calls `accept`.
-- Handled items collapse under "Handled (n)" with **Undo** for dismissed ones.
+- Handled items collapse under "Handled (n)" with **Undo** for dismissed ones. An item the
+  routine withdrew shows a **Withdrawn** chip (reason as its tooltip) instead of **Dismissed**,
+  with the reason as a muted line under the title; **Undo** returns it to `new` with no trace.
 - **Brief** opens a dialog: summary, three lists, coverage table, mentor notes, questions.
 - Pairing: opening `/?pair=<hash>&name=<host>` while signed in shows
   "Link Claude routine on ‹host›?" with **Link** and **Cancel**. Empty state of the Claude

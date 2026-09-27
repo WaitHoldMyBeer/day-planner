@@ -233,6 +233,8 @@ const whenLabel = (d) => `${d.toLocaleDateString(undefined, { weekday: 'short', 
 const sinceLabel = (d, now) => (d.toDateString() === now.toDateString() ? clockLabel(d) : whenLabel(d));
 const suggStatus = (s) => (s.status === 'accepted' || s.status === 'dismissed' ? s.status : 'new');
 const suggPrio = (s) => (PRIORITIES.includes(s.priority) ? s.priority : 'low');
+// The routine's reason when it withdrew an item that became moot; null when the user handled it.
+const suggWithdrawn = (s) => (s.withdrawn && typeof s.withdrawn === 'object' ? txt(s.withdrawn.reason) : null);
 const dueMs = (s) => { const d = parseWhen(s.due); return d ? d.getTime() : Infinity; };
 const normBeta = (b) => ({ ...(b && typeof b === 'object' ? b : {}), suggestions: !!(b && b.suggestions) });
 
@@ -1298,11 +1300,12 @@ function Planner({ user, onSignOut }) {
     const duration = Number.isFinite(dur) && dur > 0 ? clamp(Math.round(dur), 5, DAY_MIN) : null;
     const t = saveTodo({ id: newId('t'), title, tag, duration, color: null, order, done: false, scheduled: [], createdAt: nowIso() });
     say(`Added "${title}" to your to-do list.`);
-    mutateSuggestion(s, { status: 'accepted', todoId: t.id }, '/api/routine/accept', { fingerprint: s.fingerprint, todoId: t.id },
+    mutateSuggestion(s, { status: 'accepted', todoId: t.id, withdrawn: null }, '/api/routine/accept', { fingerprint: s.fingerprint, todoId: t.id },
       (e) => `The task was added, but Claude's list was not updated: ${e.message}`);
   };
-  const dismissSuggestion = (s) => mutateSuggestion(s, { status: 'dismissed' }, '/api/routine/dismiss', { fingerprint: s.fingerprint });
-  const restoreSuggestion = (s) => mutateSuggestion(s, { status: 'new' }, '/api/routine/restore', { fingerprint: s.fingerprint });
+  // Every user transition clears `withdrawn` on the server; the local copy mirrors that.
+  const dismissSuggestion = (s) => mutateSuggestion(s, { status: 'dismissed', withdrawn: null }, '/api/routine/dismiss', { fingerprint: s.fingerprint });
+  const restoreSuggestion = (s) => mutateSuggestion(s, { status: 'new', withdrawn: null }, '/api/routine/restore', { fingerprint: s.fingerprint });
 
   const cancelPair = () => { setPairAsk(null); stripParams(PAIR_PARAMS); };
   const linkRoutine = async () => {
@@ -1871,13 +1874,18 @@ function SuggestionsPanel({ routine, now, canAdd, onAdd, onDismiss, onRestore, o
       </div>`;
   };
 
-  const hrow = (s) => html`
-    <div className="hrow" key=${s.fingerprint}>
-      <span className="ht" title=${txt(s.title)}>${txt(s.title) || 'Untitled'}</span>
-      ${suggStatus(s) === 'accepted'
-        ? html`<span className="chip added">Added</span>`
-        : html`<${Fragment}><span className="chip">Dismissed</span><button type="button" className="btn sm" onClick=${() => onRestore(s)}>Undo</button><//>`}
-    </div>`;
+  const hrow = (s) => {
+    const why = suggStatus(s) === 'dismissed' ? suggWithdrawn(s) : null;
+    const chip = why != null ? html`<span className="chip" title=${why}>Withdrawn</span>` : html`<span className="chip">Dismissed</span>`;
+    return html`
+      <div className=${'hrow' + (why != null ? ' wd' : '')} key=${s.fingerprint}>
+        <span className="ht" title=${txt(s.title)}>${txt(s.title) || 'Untitled'}</span>
+        ${suggStatus(s) === 'accepted'
+          ? html`<span className="chip added">Added</span>`
+          : html`<${Fragment}>${chip}<button type="button" className="btn sm" onClick=${() => onRestore(s)}>Undo</button><//>`}
+        ${why && html`<span className="hw">${why}</span>`}
+      </div>`;
+  };
 
   return html`
     <${Fragment}>
