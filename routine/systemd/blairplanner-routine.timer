@@ -1,0 +1,12 @@
+[Unit]
+Description=Day Planner daily brief at @TIME@
+
+[Timer]
+OnCalendar=*-*-* @TIME@:00
+# Not persistent: a run missed because the computer was off is not made up at the next start.
+# run.sh also refuses a timer run that starts late, so waking the computer at noon runs nothing.
+Persistent=false
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

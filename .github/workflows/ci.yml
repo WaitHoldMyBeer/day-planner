@@ -34,6 +34,9 @@ jobs:
           DATABASE_URL: postgres://postgres:pw@localhost:5432/planner
           AUTH_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
           INVITE_CODE: testcode
+      # The routine that runs on the user's computer: ledger and audit, standard library only.
+      - run: python3 -m unittest discover -s routine/tests -v
+      - run: bash -n routine/bin/run.sh && bash -n routine/install.sh
 
 # Deploys: Vercel's Git integration builds every push to main into production and every
 # pull request into a preview URL (Project > Settings > Git). This workflow is the gate:

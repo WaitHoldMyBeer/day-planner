@@ -1,0 +1,22 @@
+{
+  "planner_url": "https://blairplanner.vercel.app",
+  "timezone": "America/Los_Angeles",
+  "daily_time": "08:00",
+  "timer_grace_minutes": 20,
+  "routine_model": "opus",
+  "mentor_model": "fable",
+  "routine_minutes": 35,
+  "mentor_minutes": 25,
+  "require_browser": true,
+  "keep_transcripts": false,
+  "keep_run_days": 30,
+  "local_inputs": [],
+  "extra_allowed_tools": [],
+  "extra_disallowed_tools": [],
+  "allowed_hosts": [
+    "mail.google.com",
+    "www.gradescope.com",
+    "piazza.com"
+  ],
+  "forbidden_urls": []
+}

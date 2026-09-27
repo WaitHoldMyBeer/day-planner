@@ -70,6 +70,8 @@ day's summary, what was checked, and what could not be.
   (mode 600), opens a planner page, and prints a verification code. Choose **Link** only when the page
   shows the same code. Only the key's SHA-256 hash is stored on the server. Unlink from the account menu.
 - The contract (tables, endpoints, data shapes, upsert rules) is `routine/SPEC.md`.
+- The routine itself (two headless agents, their tool restrictions, the schedule, the memory) is
+  documented in `routine/README.md`. `routine/install.sh <directory>` sets up an instance.
 
 ## Local development
 
