@@ -100,6 +100,25 @@ class AuditCase(unittest.TestCase):
         self.assertEqual(r["findings"], [])
         self.assertEqual(r["scripts"], {"gmail-list.js": 1})
 
+    def test_escapes_written_out_as_characters_still_match(self):
+        # An agent copying a snippet may turn an escape into the character it stands for.
+        with open(os.path.join(self.home, "snippets", "probe.js"), "w", encoding="utf-8") as f:
+            f.write("(() => document.title.replace(/[\\u200b\\u00ad]/g, '') + fetch.name)()\n")
+        p, r = self.audit([self.call(JS, {"text": "(() => document.title.replace(/[\u200b\u00ad]/g, '') + fetch.name)()"})])
+        self.assertEqual(r["findings"], [])
+        self.assertEqual(r["scripts"], {"probe.js": 1})
+
+    def test_an_escape_cannot_hide_a_call(self):
+        p, r = self.audit([self.call(JS, {"text": "window['\\u0066etch']('https://example.com'); \\u0066etch('https://example.com')"})])
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("script-network", self.rules(r))
+
+    def test_no_snippet_uses_an_escape_an_agent_could_rewrite(self):
+        for name in sorted(os.listdir(os.path.join(KIT, "snippets"))):
+            if name.endswith(".js"):
+                with self.subTest(name=name):
+                    self.assertNotRegex(snippet(name), r"\\u[0-9a-fA-F{]|\\x[0-9a-fA-F]{2}")
+
     def test_changed_constants_are_allowed(self):
         text = snippet("text.js").replace("const OFFSET = 0;", "const OFFSET = 1800;").replace(
             "'main, [role=main], #main, body'", "'#content'")

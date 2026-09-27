@@ -25,8 +25,10 @@ await (async () => {
   const decode = (s) => s.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/&#(\d+);/g, (m, n) => point(+n)).replace(/&#x([0-9a-f]+);/gi, (m, n) => point(parseInt(n, 16)))
     .replace(/&amp;/g, '&');
-  const text = (h) => decode((h || '').replace(/<(br|\/p|\/div|\/tr|\/li|\/h\d)\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, ' '))
-    .replace(/[\u200b\u200c\u200d\u034f\ufeff\u00ad]/g, '');
+  // Invisible characters that mail templates pad their previews with, by code point.
+  const hidden = [0x200b, 0x200c, 0x200d, 0x034f, 0xfeff, 0x00ad];
+  const text = (h) => [...decode((h || '').replace(/<(br|\/p|\/div|\/tr|\/li|\/h\d)\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, ' '))]
+    .filter((c) => !hidden.includes(c.codePointAt(0))).join('');
 
   let thread = null;
   if (/^[0-9a-f]{16}$/.test(ID)) thread = 'thread-f:' + BigInt('0x' + ID).toString();

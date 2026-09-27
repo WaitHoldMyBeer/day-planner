@@ -54,6 +54,8 @@ if command -v systemctl >/dev/null 2>&1; then
     sed -e "s|@INSTANCE@|$INSTANCE|g" -e "s|@KIT@|$KIT|g" -e "s|@TIME@|$TIME|g" "$KIT/systemd/$u" > "$UNITS/$u"
   done
   systemctl --user daemon-reload
+  # A timer that is already running keeps its old time until it is restarted.
+  systemctl --user try-restart blairplanner-routine.timer 2>/dev/null || true
   if [ "$ENABLE" = 1 ]; then
     systemctl --user enable --now blairplanner-routine.timer
     echo "timer    on, daily at $TIME"

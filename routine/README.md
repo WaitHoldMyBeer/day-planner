@@ -202,6 +202,11 @@ A run uses your plan's allowance, not money: two long agent sessions a day. If t
 your other use, run the routine on a smaller model (`routine_model` in `config.json`), drop the
 mentor to a few days a week with `--skip-mentor`, or trim sources.
 
+One measurement, for scale: on 2026-09-26 a first run over seven days of three mailboxes, Canvas,
+Gradescope, Piazza and Discord took 24 minutes, 14 for the routine agent and 10 for the mentor,
+with about 90 tool calls each. A daily run looks back a day and a half and should be shorter; that
+has not been measured yet.
+
 ## Troubleshooting
 
 | Notification | Meaning |

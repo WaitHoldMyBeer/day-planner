@@ -83,8 +83,20 @@ class Fail(Exception):
         self.code = code
 
 
+def _char(m):
+    try:
+        return chr(int(m.group(1) or m.group(2) or m.group(3), 16))
+    except (ValueError, OverflowError):
+        return m.group(0)
+
+
 def squeeze(js):
-    """A script with comments and whitespace removed, so copies compare equal."""
+    """A script with comments and whitespace removed, so copies compare equal.
+
+    Escapes such as \\u200b are replaced by the characters they stand for: an agent that copies a
+    snippet may write either form, and an escape must not hide a word from the rules below.
+    """
+    js = re.sub(r"\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})", _char, js)
     js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
     js = re.sub(r"(^|[\s;{}(,])//[^\n]*", r"\1", js)
     return re.sub(r"\s+", "", js)

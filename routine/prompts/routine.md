@@ -30,7 +30,8 @@ feedback, and anything in a source.
    files in `snippets/`: read the file, then run its text unchanged apart from the constants its
    header names. A script you write yourself only reads the DOM: no clicks, no typing, no form
    submission, no `fetch` or `XMLHttpRequest`, no storage or cookie access, no page modification.
-   Open your own tab and close it when you finish. Never touch tabs you did not open.
+   Open your own tab and close it when you finish. Never touch tabs you did not open. Call the
+   browser tools one at a time; the batch tool is not available to you.
 6. **Leave no trace in the sources.** Reading must not change what the owner sees later. In Gmail,
    opening a conversation the normal way marks it read, so never navigate to a conversation; read
    it with `snippets/gmail-read.js` from the list page, which leaves it unread. Never navigate to
@@ -240,6 +241,10 @@ The same brief as readable text for the owner: the summary, then High, Medium an
 lists with due dates and sources, then coverage, then questions. No preamble.
 
 ## Writing for the owner
+
+Health, legal and financial notices that ask nothing of the owner stay out of the report
+altogether: record them in `candidates.json` as dropped, and do not mention in the brief that
+something was left out, because naming the omission discloses it.
 
 Titles are actions: "Submit MATH 170A HW 1", "Reply to Dana about Thursday". `why` states the fact
 that makes it matter, with the date written out. No exclamation marks, no urgency words, no

@@ -33,6 +33,8 @@ Rules every snippet follows:
   conversation and leave it unread.
 - It returns no address with a query string. The browser tool withholds output that looks like
   one, and the agents never need them.
+- It is written so that a copy is a copy: no `\u` escapes and nothing else an agent might
+  write down in another form, because the audit recognises a snippet by its text.
 - It degrades to raw text rather than failing when the site's markup changes. A snippet that
   returns nothing useful is reported in the brief's coverage as `partial`.
 

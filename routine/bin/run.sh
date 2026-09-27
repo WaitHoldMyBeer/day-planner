@@ -60,7 +60,8 @@ KEEP_DAYS="$(cfg keep_run_days 30)"
 NEED_BROWSER="$(cfg require_browser true)"
 KEEP_TRANSCRIPTS="$(cfg keep_transcripts false)"
 
-notify() {  # title, body
+notify() {  # title, body. BP_QUIET=1 silences notifications (used by the tests).
+  if [ -n "${BP_QUIET:-}" ]; then return 0; fi
   command -v notify-send >/dev/null 2>&1 || return 0
   notify-send --app-name="Day Planner" --icon=x-office-calendar "$1" "${2-}" >/dev/null 2>&1 || true
 }
@@ -323,10 +324,12 @@ fi
 # The report that goes out: the mentor's if it produced a valid one, else the routine's marked as
 # not double-checked; with a note when the audit found that a reading rule was broken.
 python3 - "$RUN_DIR" "$FINAL" "$MENTOR_STATE" <<'PY'
-import glob, json, sys
+import datetime, glob, json, sys
 run_dir, final, mentor_state = sys.argv[1:4]
 r = json.load(open(final))
 brief = r.setdefault("brief", {})
+# The time on the brief is the runner's clock, not an agent's estimate.
+brief["generatedAt"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 if mentor_state == "skipped":
     brief["mentor"] = {"status": "skipped", "corrections": 0,
         "notes": ["The second check did not run today, so this list was not double-checked."]}
