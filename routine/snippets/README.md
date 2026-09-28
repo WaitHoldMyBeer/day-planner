@@ -10,6 +10,11 @@ instance at the start of every run, so edits belong here, in the kit.
 | `gmail-list.js` | a Gmail list or search page | conversations shown: id, thread, sender, subject, preview, date, unread |
 | `gmail-read.js` | the same list page, with `ID` set | one message of a conversation, without marking it read |
 | `canvas-json.js` | a Canvas API page (`/api/v1/...`) | the listed objects, reduced to the fields that matter |
+| `canvas-modules.js` | a course's module list (`/api/v1/courses/<id>/modules?include[]=items`) | what the course links to: its syllabus file, schedule page, forum |
+| `canvas-course.js` | a course's record (`/api/v1/courses/<id>?include[]=syllabus_body`) | the syllabus kept in Canvas, and its links |
+| `canvas-file.js` | a file's record (`/api/v1/courses/<id>/files/<file id>`) | what the file is; with `OPEN` true, opens Canvas's document viewer for it |
+| `docviewer-text.js` | Canvas's document viewer | the text of a PDF or document, without downloading it |
+| `schedule-table.js` | a course page with a schedule table | the rows for the coming days, or every row |
 | `piazza-feed.js` | a Piazza class page | the posts in the feed, without opening any |
 | `gradescope-courses.js` | `gradescope.com` home | courses by term |
 | `gradescope-assignments.js` | a Gradescope course page | assignments, status, due dates |
@@ -31,6 +36,11 @@ Rules every snippet follows:
 - It makes no network request, with one exception: `gmail-read.js` sends a single `GET` to the
   print view of the same mailbox the tab already shows. That is the only way found to read a
   conversation and leave it unread.
+- `docviewer-text.js` asks the document viewer's own library for a document's text, which loads
+  the file the viewer was given, as showing it would. Nothing is saved.
+- It does not move the tab, with one exception: `canvas-file.js` with `OPEN` true points the tab
+  at Canvas's own document viewer for the file it describes, using the address Canvas gave. That
+  is how a syllabus kept as a PDF is read without downloading it.
 - It returns no address with a query string. The browser tool withholds output that looks like
   one, and the agents never need them.
 - It is written so that a copy is a copy: no `\u` escapes and nothing else an agent might

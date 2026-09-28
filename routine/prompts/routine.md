@@ -56,7 +56,9 @@ Read these first, in this order.
 | `sources.md` | the source registry: what to read, how, what is excluded |
 | `playbook.md` | lessons from earlier runs. Apply entries marked `active`. Ignore `candidate` and `retired` ones. |
 | `RUN_DIR/inputs/mentor-feedback.md` | the mentor's notes on the previous run, if the file exists |
+| `feedback.md` | what the owner has told the routine and the mentor, newest under "New". What the owner states is fact: it outranks the playbook, the mentor and your own judgement. Act on it today, even before the mentor has filed it. |
 | `memory/notes.md` | short standing notes about the owner's situation |
+| `memory/courses.md` | for each course: the documents that define it and when they were read, the work that recurs, the dates of tests, where work is handed in |
 | `RUN_DIR/inputs/context.json` | the planner's view: current to-dos, past suggestions with status `new`, `accepted` or `dismissed`, and feedback counts |
 | `RUN_DIR/inputs/ledger.json` | what earlier runs saw, per fingerprint |
 | `RUN_DIR/inputs/local/` | copies of local files the runner was configured to include, if any |
@@ -76,12 +78,36 @@ Read these first, in this order.
    and say on their first line how much there is (`[0-900 of 7519; next OFFSET 900]`). Get the rest
    with `snippets/more.js`, which is short; do not run the long snippet again for each part. Read a
    whole list before you judge it: the item that matters may be on the last page.
-3. **Record every candidate** you considered, including the ones you decide to drop, with the
+3. **Know each course.** A course site's list of upcoming work shows only what the instructor
+   entered there. What the course requires is written in its syllabus and its schedule, and work
+   handed in elsewhere (a form, a quiz before class, a reading response) often appears nowhere
+   else. So, for every course, as its entry in `sources.md` describes:
+   - **Every run, list what the course links to.** It is one page per course.
+   - **Read a document in full** when `memory/courses.md` holds no record of it, when the site
+     says it changed after the recorded date, or when an announcement says it was posted or
+     updated. Syllabus first, then schedule. Write what you learn to `RUN_DIR/course-notes.md`:
+     work that recurs (what, how often, due when, handed in where, how much of the grade), dates
+     of tests, the rule for late work, and every link that leaves the site.
+   - **Read each course page listed in `sources.md` every run**, for the coming 10 days.
+   - **A link to a site that is not listed is not followed.** Put it in the brief's `questions`,
+     naming the site and what it appears to hold, so the owner can list it.
+   Reading course documents does not count against the budget in step 2.
+4. **Turn recurring work into candidates.** For each piece of recurring work in
+   `memory/courses.md` or found today, make one candidate for every instance due within the
+   next 72 hours. Take the due time from the course page when it gives one, else from the
+   course's rule. If the page and the rule disagree, use the earlier time and say so.
+5. **Follow every lead.** A lead is any sign of work you have not accounted for: a name you
+   cannot place ("PCQ", "prelab", "reading response"), "posted on the schedule page", "see the
+   syllabus", a file you have not read. Follow it in this run, within the listed sources. If you
+   cannot, it goes in the brief's `questions` and in the coverage of that source as `partial`;
+   writing it under `uncertain` alone is not enough. A lead is never carried to the next day
+   without one of the two.
+6. **Record every candidate** you considered, including the ones you decide to drop, with the
    evidence and the reason. The mentor audits this file, so a dropped item with no reason is a defect.
-4. **Decide** for each candidate: `keep` (becomes a suggestion), `brief` (mentioned in the brief
+7. **Decide** for each candidate: `keep` (becomes a suggestion), `brief` (mentioned in the brief
    only), or `drop`.
-5. **De-duplicate** kept items against the planner, as described below.
-6. **Write the outputs**, then stop. The runner validates and sends them.
+8. **De-duplicate** kept items against the planner, as described below.
+9. **Write the outputs**, then stop. The runner validates and sends them.
 
 ## What counts as a candidate
 
@@ -162,13 +188,15 @@ Built from the source's own identifiers, never from the title, so the same item 
 identity every day. Pattern `^[a-z0-9][a-z0-9:._@-]{2,159}$`. Lowercase everything. Forms:
 `mail:<account>:<thread id>`, `canvas:<type>:<course id>:<item id>`,
 `gradescope:<course id>:<assignment id or name-slug>`, `piazza:<class id>:<post number>`,
-`discord:<channel id>:<message id>`, `local:<file-slug>:<date>:<slug>`. If a source gives no
+`discord:<channel id>:<message id>`, `local:<file-slug>:<date>:<slug>`,
+`course:<course id>:<slug of the work>:<date due>` for an instance of recurring work. If a source gives no
 identifier, use a slug of the most stable text (course code plus assignment name), not the date
 you saw it.
 
 ## Outputs
 
-Write exactly these three files in RUN_DIR. All timestamps are ISO 8601 with the offset of the
+Write these three files in RUN_DIR, and `course-notes.md` as well on a run in which you read a
+course document. All timestamps are ISO 8601 with the offset of the
 timezone in `preflight.json`.
 
 ### `candidates.json`

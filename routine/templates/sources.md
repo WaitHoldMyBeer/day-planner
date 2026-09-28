@@ -48,11 +48,37 @@ from that date to today, rounded up, and at least 2.
      `https://canvas.example.edu/api/v1/announcements?context_codes[]=course_<id>&start_date=<since date>&end_date=<tomorrow>&per_page=20`
      `canvas-json.js` lists them; set its `ITEM` to an announcement's id to read its text.
   4. Inbox, list only: `https://canvas.example.edu/api/v1/conversations?scope=unread&per_page=20`
+- course documents, for every course, every run:
+  5. What the course links to:
+     `https://canvas.example.edu/api/v1/courses/<id>/modules?include[]=items&per_page=50` with
+     `snippets/canvas-modules.js`, and
+     `https://canvas.example.edu/api/v1/courses/<id>?include[]=syllabus_body` with
+     `snippets/canvas-course.js`.
+  6. A document (syllabus, schedule, homework instructions) is read in full when
+     `memory/courses.md` has no record of it or the site says it changed since. Navigate to
+     `https://canvas.example.edu/api/v1/courses/<id>/files/<file id>`, run
+     `snippets/canvas-file.js` with `OPEN` true, wait ten seconds, then run
+     `snippets/docviewer-text.js`. Nothing is downloaded.
+  7. A link that leaves Canvas is followed only if its site is listed under "Course pages" below.
+     Otherwise name the site in the brief's questions.
+- never open a form, a quiz, or a submission page. Those are where you do the work; the routine
+  gives you the link.
 - never: navigate to an announcement, discussion or conversation page, and never request a single
   conversation. Both mark the item read.
 - signed out looks like: a sign-in page, or `{"status":"unauthenticated"}`. Mark `skipped`.
 - link for the owner: the site address followed by the item's `html_url`
 - fingerprint: `canvas:<type>:<course id>:<item id>`
+
+### Course pages
+- enabled: no
+- what: pages outside Canvas that a course uses for its schedule. List each one here, and add its
+  site to `allowed_hosts` in `config.json`. A course page that is not listed is not opened.
+- pages:
+  - *(course)*: `https://instructor.example.edu/course/`
+- read with: Chrome. Navigate to the page and run `snippets/schedule-table.js`. It gives the rows
+  for the coming 10 days; with `ALL` true, every row.
+- source kind in reports: `other`, with label `<course> schedule page`
+- fingerprint: `course:<course id>:<slug of the work>:<date due>`
 
 ### Gradescope
 - enabled: no

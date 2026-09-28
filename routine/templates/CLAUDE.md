@@ -9,7 +9,9 @@ here links to it.
 | `config.json` | schedule, models, limits, extra tool rules | the owner |
 | `sources.md` | what is read and how, and what is excluded | the owner |
 | `playbook.md`, `playbook-changelog.md` | lessons from earlier runs | the mentor |
+| `feedback.md` | what the owner tells the routine and the mentor | the owner, with `bin/tell`; the mentor files it |
 | `memory/notes.md` | standing facts | the mentor |
+| `memory/courses.md` | what each course requires | the mentor |
 | `memory/state.json` | what has been seen and reported | `bin/ledger.py` only |
 | `questions.md` | open questions for the owner | the mentor |
 | `runs/<date>_<time>/` | one run's inputs, outputs and log | the run |

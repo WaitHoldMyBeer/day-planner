@@ -149,7 +149,7 @@ say "Brief started" "Reading your sources. This takes several minutes."
 
 # The reading snippets are copied in so the agents never need a path outside the instance.
 rm -rf snippets; mkdir -p snippets; cp "$KIT"/snippets/* snippets/
-for f in playbook.md playbook-changelog.md questions.md memory/notes.md; do
+for f in playbook.md playbook-changelog.md questions.md feedback.md memory/notes.md memory/courses.md; do
   if [ ! -f "$f" ]; then : > "$f"; fi
 done
 
@@ -251,9 +251,10 @@ mapfile -t EXTRA_DENY < <(cfg_list extra_disallowed_tools)
 
 ROUTINE_ALLOW=("${READ_TOOLS[@]}" "${EXTRA_ALLOW[@]}" "Edit($RUN_DIR/**)")
 ROUTINE_DENY=("${NEVER[@]}" "${EXTRA_DENY[@]}" "Edit(playbook.md)" "Edit(playbook-changelog.md)"
-  "Edit(questions.md)" "Edit(memory/**)")
+  "Edit(questions.md)" "Edit(feedback.md)" "Edit(memory/**)")
 MENTOR_ALLOW=("${READ_TOOLS[@]}" "${EXTRA_ALLOW[@]}" "Edit($RUN_DIR/**)" "Edit(playbook.md)"
-  "Edit(playbook-changelog.md)" "Edit(questions.md)" "Edit(memory/notes.md)")
+  "Edit(playbook-changelog.md)" "Edit(questions.md)" "Edit(feedback.md)" "Edit(memory/notes.md)"
+  "Edit(memory/courses.md)")
 MENTOR_DENY=("${NEVER[@]}" "${EXTRA_DENY[@]}")
 REPAIR_ALLOW=("Edit($RUN_DIR/**)")
 

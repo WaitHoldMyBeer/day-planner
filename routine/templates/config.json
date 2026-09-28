@@ -16,7 +16,8 @@
   "allowed_hosts": [
     "mail.google.com",
     "www.gradescope.com",
-    "piazza.com"
+    "piazza.com",
+    "canvadocs.instructure.com"
   ],
   "forbidden_urls": []
 }

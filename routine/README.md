@@ -111,6 +111,8 @@ followed.
 | Gmail, connected account | Claude's Gmail connector | none |
 | Gmail, other accounts | list page, then `gmail-read.js` (print view, fetched as text) | none; conversations stay unread |
 | Canvas | the site's own data pages | none; announcements and inbox stay unread |
+| Course documents | Canvas's document viewer, asked for the text | none; nothing is downloaded |
+| Course pages you listed | the page's schedule table | none; forms linked from it are never opened |
 | Gradescope | course and assignment pages | none |
 | Piazza | the feed only; posts are never opened | none |
 | Discord | overview, unread direct messages, watched servers | none while the tab stays in the background |
@@ -140,6 +142,8 @@ write to the planner is visible to anyone who can sign in to your planner accoun
 |---|---|---|
 | `memory/state.json` | every item seen: first and last seen, decision, status in the planner | `ledger.py prune`: 60 days unseen, 30 days past due, 2000 items |
 | `memory/notes.md` | standing facts about your situation | the mentor: 60 lines, rewritten, dated |
+| `memory/courses.md` | what each course requires: documents read, recurring work, test dates | the mentor: 25 lines per course, dated |
+| `feedback.md` | what you told the routine, and what was done about it | you write, the mentor files |
 | `playbook.md` | lessons | the mentor: 25 active, 15 candidate, retired after 30 idle days |
 | `questions.md` | what the routine needs you to answer | the mentor: 8 open |
 | `runs/` | each run's inputs, outputs, log, audit | the runner: `keep_run_days`. The raw record of what the agents read (`stream-*.jsonl`) is deleted at the end of each run unless `keep_transcripts` is true. |
@@ -152,6 +156,42 @@ submitted, cancelled, or past with nothing left to do. It moves to **Handled** m
 **Withdrawn**, with the reason, and **Undo** brings it back. The routine never withdraws something
 only because it did not see it that day. Withdrawals are kept apart from your own dismissals, so
 the mentor never mistakes the routine's housekeeping for your judgement.
+
+## Telling the mentor something
+
+When the routine misses something, or gets something wrong, say so:
+
+```bash
+bin/tell "The syllabus says there is a survey before every lecture, and the brief never mentioned it."
+bin/tell --list        # what is waiting, and what was handled
+```
+
+Your message goes into `feedback.md` under "New", dated, in your words. Both agents read it at the
+start of the next run. What you state is treated as fact. The mentor goes to the source you name,
+finds where the method failed, corrects that day's report, records the fact, decides whether it
+is a lesson, and moves your message to "Handled" with a line saying what it changed. Your word is
+enough to make a lesson active at once; the lesson is written about the kind of failure, not
+about the one item you mentioned.
+
+## What a course requires
+
+A course site's list of upcoming work holds only what the instructor entered there. Work that is
+handed in somewhere else, such as questions before each class on a form, is often stated only in
+the syllabus and on a schedule page. So the routine:
+
+- lists what each course links to on every run (`canvas-modules.js`, `canvas-course.js`);
+- reads the syllabus and the schedule in full when it has no record of them or they changed,
+  through Canvas's own document viewer, downloading nothing;
+- reads the course pages you listed in `sources.md` for the coming ten days;
+- keeps what it learned in `memory/courses.md`, and turns recurring work into a suggestion for
+  each instance due within 72 hours;
+- names in the brief's questions any outside site a course links to that you have not listed.
+
+It never opens a form, a quiz or a submission page. It gives you the link.
+
+A sign of work that is not accounted for, such as an unfamiliar name for an assignment, is a lead.
+A lead is followed in the same run or put to you as a question. It is not carried from one day
+to the next.
 
 ## How the mentor improves the routine without overfitting
 
@@ -177,6 +217,7 @@ Every change is one line in `playbook-changelog.md`. You can edit or delete any 
 | Something always or never suggested | write it under "Rules that apply to every source" in `sources.md` |
 | A different time | `daily_time` in `config.json`, then run `install.sh` again |
 | To see why something was missed | `runs/<date>_<time>/candidates.json` lists everything considered, with reasons; `mentor.json` lists what the mentor found |
+| To correct the routine | `bin/tell "..."` |
 
 ## Files
 
@@ -188,6 +229,7 @@ routine/
   bin/run.sh              one run, start to finish
   bin/ledger.py           the ledger; the only writer of memory/state.json
   bin/audit.py            checks every tool call of a run against the reading rules
+  bin/tell                says something to the routine and its mentor
   prompts/routine.md      the routine agent
   prompts/mentor.md       the mentor agent
   snippets/               read-only page readers
