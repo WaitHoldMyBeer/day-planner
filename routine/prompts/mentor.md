@@ -95,6 +95,8 @@ same window. You have a smaller budget than the routine agent: list views for ev
 most 4 opened items per source. Spend the opened items where an error would cost the owner most:
 items due within 72 hours, and messages from named people. The script tool returns about 1000
 characters per call; the snippets say how much there is, and `snippets/more.js` returns the rest.
+When the tool withholds a part, read it again in spans of 300 and leave out only the span it still
+withholds.
 
 **Look for these defects.**
 

@@ -77,7 +77,9 @@ Read these first, in this order.
    The script tool returns about 1000 characters per call. The snippets answer in compact lines
    and say on their first line how much there is (`[0-900 of 7519; next OFFSET 900]`). Get the rest
    with `snippets/more.js`, which is short; do not run the long snippet again for each part. Read a
-   whole list before you judge it: the item that matters may be on the last page.
+   whole list before you judge it: the item that matters may be on the last page. When the tool
+   withholds a part, read that part again in spans of 300 with `more.js` and leave out only the
+   span it still withholds; one withheld span is no reason to give up a document.
 3. **Know each course.** A course site's list of upcoming work shows only what the instructor
    entered there. What the course requires is written in its syllabus and its schedule, and work
    handed in elsewhere (a form, a quiz before class, a reading response) often appears nowhere
