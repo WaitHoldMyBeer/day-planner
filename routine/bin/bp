@@ -137,7 +137,7 @@ def check_suggestion(s, where):
     errs = []
     if not isinstance(s, dict):
         return [f"{where}: not an object"]
-    if not isinstance(s.get("fingerprint"), str) or not FINGERPRINT.match(s["fingerprint"]):
+    if not isinstance(s.get("fingerprint"), str) or not FINGERPRINT.fullmatch(s["fingerprint"]):
         errs.append(f"{where}: bad fingerprint {s.get('fingerprint')!r}")
     if not isinstance(s.get("title"), str) or not s["title"].strip():
         errs.append(f"{where}: title is required")
@@ -188,6 +188,25 @@ def check_report(r):
         if fp in seen:
             errs.append(f"suggestions[{i}]: duplicate fingerprint {fp}")
         seen.add(fp)
+    wd = r.get("withdraw")
+    if wd is not None and not isinstance(wd, list):
+        errs.append("withdraw must be a list")
+        wd = []
+    gone = set()
+    for i, w in enumerate(wd or []):
+        fp = w.get("fingerprint") if isinstance(w, dict) else None
+        if not isinstance(fp, str) or not FINGERPRINT.fullmatch(fp):
+            errs.append(f"withdraw[{i}]: bad fingerprint {fp!r}")
+        elif fp in seen:
+            errs.append(f"withdraw[{i}]: {fp} is both suggested and withdrawn")
+        elif fp in gone:
+            errs.append(f"withdraw[{i}]: duplicate fingerprint {fp}")
+        gone.add(fp)
+        reason = w.get("reason") if isinstance(w, dict) else None
+        if not isinstance(reason, str) or not reason.strip():
+            errs.append(f"withdraw[{i}]: reason is required")
+    if len(wd or []) > 60:
+        errs.append(f"{len(wd)} withdrawals; the limit is 60")
     b = r.get("brief")
     if not isinstance(b, dict):
         errs.append("brief must be an object")
@@ -286,7 +305,7 @@ def cmd_report(args):
     if errs:
         raise Fail(EXIT_INVALID, "Report is not valid:\n  - " + "\n  - ".join(errs[:20]))
     if args.check:
-        print(f"valid: {len(report['suggestions'])} suggestions")
+        print(f"valid: {len(report['suggestions'])} suggestions, {len(report.get('withdraw') or [])} withdrawals")
         return 0
     res = expect_ok(*call(cfg, read_key(home), "POST", "/api/routine/report", report))
     print("reported:", ", ".join(f"{k} {v}" for k, v in res.items() if isinstance(v, int)))

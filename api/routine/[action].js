@@ -7,7 +7,7 @@
 //   POST dismiss {fingerprint, reason?}  session  suggestion → dismissed
 //   POST restore {fingerprint}           session  suggestion → new
 //   GET  context                         key      to-dos, suggestion history, feedback
-//   POST report {runId, date, brief, suggestions}  key  upsert suggestions, replace the day's brief
+//   POST report {runId, date, brief, suggestions, withdraw?}  key  upsert suggestions, withdraw moot ones, replace the day's brief
 import { route, body } from '../../lib/http.js';
 import { requireUser } from '../../lib/auth.js';
 import {

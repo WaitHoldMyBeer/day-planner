@@ -1,0 +1,10 @@
+[Unit]
+Description=Day Planner daily brief (Claude routine)
+Documentation=file://@KIT@/README.md
+
+[Service]
+Type=oneshot
+Environment=BP_HOME=@INSTANCE@
+ExecStart=@INSTANCE@/bin/run.sh
+TimeoutStartSec=90min
+Nice=5

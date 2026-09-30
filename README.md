@@ -27,7 +27,7 @@ State as of 2026-09-24:
    Vercel project. Every push to `main` deploys to production and every pull request gets a preview URL.
    GitHub Actions runs the test suite on each push and pull request (`.github/workflows/ci.yml`), so a
    red check means the deploy that follows carries a failing build. Vercel's Hobby plan allows at most
-   12 serverless functions per deployment; the API is 7 files, so keep related routes in one file.
+   12 serverless functions per deployment; the API is 8 files, so keep related routes in one file.
 
 3. **Google Calendar.** Done in Google Cloud project `day-planner-509622`: Calendar API enabled, OAuth
    consent screen "Day Planner" (External, published to production, homepage and privacy URLs set), and a
@@ -56,6 +56,31 @@ planner; each account is separate.
   event and unlocks the block. Deleting the block itself leaves the Google event alone.
 - Only the primary calendar is used. Edits made to a linked block later are not pushed back to Google.
 
+## Repeating tasks
+
+Open a task and pick days under **Repeat** (`S M T W T F S`). **At** sets a time or leaves it empty
+(**No set time**); **From** defaults to today, **Until** is optional.
+
+- **With a time** the task puts a block on the calendar on each of those days when you open that day.
+  Move or resize one and only that day changes. Open it and choose **Skip this day** to take that day out
+  of the rule for good. Editing the task's days, time, length, title or color brings blocks from today on
+  up to date; past days keep what they had. Such blocks show a repeat mark next to their name.
+- **Without a time** a copy of the task appears in the list for each of those days in the coming week,
+  stacked under the task (see below). Tick a copy off as usual; deleting a copy from its editor skips that
+  day. A copy's editor has **Edit the repeating task** to change the rule.
+- A repeating task has no checkbox; it cannot be done. Deleting it also deletes its copies that are not
+  done (it asks first); blocks it made stay where they are.
+- Copies are ordinary to-do documents with the id `<task id>-<date>`, so two devices making the same copy
+  write the same document. A device makes copies only from a list fetched since midnight.
+
+## Stacks in the list
+
+Tasks with the same title (ignoring case and spacing), and a repeating task with its copies, show as one
+card with a count (`×3`). The card moves as one: drag it, or use its arrows, and all of its tasks move
+together. Drop it on the calendar to schedule one of them (the copy for the day you are looking at, else the
+earliest). The chevron lists the tasks under the card, each with its own checkbox; drag one out into the list
+to make it an item of its own again, or onto the calendar to schedule just that one.
+
 ## Claude's suggestions (beta)
 
 Off by default. Account menu → **Beta features** → **Claude's suggestions** adds a second list in the
@@ -70,6 +95,8 @@ day's summary, what was checked, and what could not be.
   (mode 600), opens a planner page, and prints a verification code. Choose **Link** only when the page
   shows the same code. Only the key's SHA-256 hash is stored on the server. Unlink from the account menu.
 - The contract (tables, endpoints, data shapes, upsert rules) is `routine/SPEC.md`.
+- The routine itself (two headless agents, their tool restrictions, the schedule, the memory) is
+  documented in `routine/README.md`. `routine/install.sh <directory>` sets up an instance.
 
 ## Local development
 

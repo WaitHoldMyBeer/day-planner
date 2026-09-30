@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""tell: say something to the routine and its mentor.
+
+    tell "The PHYS 4C syllabus says there is a survey before every lecture."
+    tell            (no message: read it from the terminal, end with Ctrl-D)
+    tell --list     show what is waiting and what was handled
+
+The message is added to <home>/feedback.md under "New", dated, in your words. Both agents read
+that file at the start of every run. The mentor acts on each new message, then moves it to
+"Handled" with a line saying what it changed. <home> is $BP_HOME, else the directory that holds
+this command's `bin`, else the current directory.
+
+Standard library only.
+"""
+import datetime
+import os
+import sys
+
+HEAD = """# Feedback
+
+What you tell the routine and its mentor. Add a message with `bin/tell "..."`, or write it under
+"New" yourself. The mentor acts on every new message at the next run, then moves it to "Handled"
+with a line saying what it changed. Your words are kept as you wrote them.
+
+## New
+
+## Handled
+"""
+
+
+def home():
+    if os.environ.get("BP_HOME"):
+        return os.path.abspath(os.environ["BP_HOME"])
+    here = os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0])))
+    if os.path.exists(os.path.join(here, "config.json")):
+        return here
+    return os.getcwd()
+
+
+def main(argv):
+    path = os.path.join(home(), "feedback.md")
+    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    if "## New" not in text or "## Handled" not in text:
+        text = HEAD if not text.strip() else text.rstrip("\n") + "\n\n## New\n\n## Handled\n"
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return 0
+    if argv[:1] == ["--list"]:
+        print(text[text.index("## New"):].strip())
+        return 0
+    message = " ".join(argv).strip() if argv else sys.stdin.read().strip()
+    if not message:
+        print("tell: nothing to say", file=sys.stderr)
+        return 2
+    now = datetime.datetime.now().astimezone()
+    entry = f"### {now.strftime('%Y-%m-%d %H:%M')}\n\n" + "\n".join("> " + line for line in message.splitlines()) + "\n"
+    at = text.index("## Handled")
+    new_part = text[:at].rstrip("\n")
+    text = f"{new_part}\n\n{entry}\n{text[at:]}"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+    print(f"added to {path}; the mentor acts on it at the next run")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
