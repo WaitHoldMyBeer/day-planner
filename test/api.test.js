@@ -132,6 +132,62 @@ test('todos upsert, list, delete', async () => {
   assert.equal(r.status, 400);
 });
 
+test('repeating tasks, their copies and unstacked tasks keep their fields', async () => {
+  const repeat = { days: [1, 3, 5], start: 660, from: '2026-09-30', until: null, skip: ['2026-10-02'], version: 1 };
+  let r = await call('PUT', '/api/todos/s1', { title: 'Gym', duration: 45, order: 3000, repeat, rev: 'rev0101' });
+  assert.equal(r.status, 200);
+  r = await call('PUT', '/api/todos/s1-2026-10-05', { title: 'Gym', order: 3000, seriesId: 's1', forDate: '2026-10-05', rev: 'rev0102' });
+  assert.equal(r.status, 200);
+  r = await call('PUT', '/api/todos/u1', { title: 'Gym', order: 4000, unstacked: true, junk: 'dropped', rev: 'rev0103' });
+  assert.equal(r.status, 200);
+  r = await call('GET', '/api/todos');
+  const byId = new Map(r.json.todos.map((t) => [t.id, t]));
+  assert.deepEqual(byId.get('s1').repeat, repeat);
+  assert.equal(byId.get('s1-2026-10-05').seriesId, 's1');
+  assert.equal(byId.get('s1-2026-10-05').forDate, '2026-10-05');
+  assert.equal(byId.get('u1').unstacked, true);
+  assert.equal(byId.get('u1').junk, undefined);
+  for (const id of ['s1', 's1-2026-10-05', 'u1']) await call('DELETE', '/api/todos/' + id);
+});
+
+test('bad repeat rules are refused', async () => {
+  const ok = { days: [1, 3], start: null, from: '2026-09-30', until: '2026-12-31', skip: [], version: 2 };
+  let r = await call('PUT', '/api/todos/s2', { title: 'Read', repeat: ok, rev: 'rev0201' });
+  assert.equal(r.status, 200);
+  const bads = [
+    { days: [7] },
+    { days: [1, 1] },
+    { days: [] },
+    { start: 1440 },
+    { from: 'tomorrow' },
+    { skip: ['2026-10-01', 'not a date'] },
+  ];
+  for (const patch of bads) {
+    r = await call('PUT', '/api/todos/s2', { title: 'Read', repeat: { ...ok, ...patch }, rev: 'rev0202' });
+    assert.equal(r.status, 400, JSON.stringify(patch));
+  }
+  r = await call('PUT', '/api/todos/s2', { title: 'Read', seriesId: 'bad id!', rev: 'rev0203' });
+  assert.equal(r.status, 400);
+  r = await call('PUT', '/api/todos/s2', { title: 'Read', seriesId: 's1', forDate: '2026-02-30', rev: 'rev0204' });
+  assert.equal(r.status, 400);
+  r = await call('GET', '/api/todos');
+  assert.deepEqual(r.json.todos.find((t) => t.id === 's2').repeat, ok);
+  await call('DELETE', '/api/todos/s2');
+});
+
+test('blocks keep seriesDate and seriesVersion', async () => {
+  const blocks = [{ id: 'b9', name: 'Gym', start: 660, duration: 45, color: '#039BE5', locked: false, todoId: 's1', seriesDate: '2026-10-05', seriesVersion: 3 }];
+  let r = await call('PUT', '/api/days/2026-10-05', { blocks, rev: 'rev0301' });
+  assert.equal(r.status, 200);
+  r = await call('GET', '/api/days/2026-10-05');
+  assert.equal(r.json.day.blocks[0].seriesDate, '2026-10-05');
+  assert.equal(r.json.day.blocks[0].seriesVersion, 3);
+  r = await call('PUT', '/api/days/2026-10-05', { blocks: [{ ...blocks[0], seriesDate: '10/05/2026' }], rev: 'rev0302' });
+  assert.equal(r.status, 400);
+  r = await call('PUT', '/api/days/2026-10-05', { blocks: [{ ...blocks[0], seriesVersion: 1.5 }], rev: 'rev0303' });
+  assert.equal(r.status, 400);
+});
+
 test('settings round trip', async () => {
   let r = await call('PUT', '/api/settings', { colors: ['#112233', 'nothex', '#ABCDEF'], rev: 'rev0005' });
   assert.equal(r.status, 200);

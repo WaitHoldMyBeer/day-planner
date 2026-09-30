@@ -152,6 +152,19 @@ button { cursor:pointer; }
 .todo .ud button:hover { background:var(--surface-2); color:var(--text); }
 .todo .ud button:disabled { opacity:.25; }
 .todo .ud svg { width:12px; height:12px; }
+/* stacks: one card for duplicates, its members listed under it when expanded */
+.stack:not(.open) > .todo.stack-head { margin-bottom:9px; box-shadow:var(--shadow), 0 3px 0 -1px var(--bg), 0 3px 0 0 var(--line); }
+.stack.lifted { opacity:.35; }
+.todo .xn { display:inline-block; margin-left:6px; padding:0 6px; border-radius:9px; background:var(--surface-2); color:var(--muted);
+  font-size:10.5px; font-weight:600; line-height:16px; vertical-align:1px; white-space:nowrap; }
+.todo .exp { width:24px; height:24px; flex:none; border:0; background:transparent; color:var(--muted); padding:0; margin-top:-2px;
+  display:flex; align-items:center; justify-content:center; border-radius:50%; }
+.todo .exp:hover { background:var(--surface-2); color:var(--text); }
+.todo .exp svg { width:16px; height:16px; }
+.todo.member { margin-left:18px; box-shadow:none; }
+.todo .meta { min-width:0; }
+.chip.rep { max-width:100%; min-width:0; }
+.chip.fordate { background:var(--accent-soft); color:var(--accent); }
 .insert { position:absolute; left:10px; right:10px; height:0; border-top:2px solid var(--accent);
   pointer-events:none; z-index:3; }
 .insert::before { content:''; position:absolute; left:-4px; top:-5px; width:8px; height:8px;
@@ -203,6 +216,7 @@ button { cursor:pointer; }
 .block .tm { opacity:.9; line-height:1.25; overflow:hidden; white-space:nowrap; }
 .block .tg { display:inline-block; font-size:10px; opacity:.9; margin-left:6px; padding:0 5px; border-radius:8px; background:rgba(0,0,0,.18); vertical-align:1px; }
 .block .gm { display:inline-block; font-size:10px; margin-left:6px; padding:0 5px; border-radius:8px; background:rgba(255,255,255,.28); vertical-align:1px; font-weight:600; }
+.block .gm.rp svg { width:10px; height:10px; vertical-align:-1px; }
 .block .lk { position:absolute; top:2px; right:2px; width:22px; height:22px; border:0; background:transparent; color:#fff; opacity:.5;
   padding:4px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
 .block .lk svg { width:14px; height:14px; }
@@ -282,6 +296,11 @@ button { cursor:pointer; }
   text-transform:none; letter-spacing:0; font-weight:400; color:var(--text); }
 .check input { width:15px; height:15px; accent-color:var(--accent); margin:0; }
 .check .sub { color:var(--muted); font-size:11px; }
+.weekdays .chipbtn { width:34px; padding:0; }
+.hint { font-size:11.5px; color:var(--muted); line-height:1.45; margin-top:7px; }
+/* holds the focus between a drop and the block editor mounting, so a touch keyboard opens */
+.focus-sink { position:fixed; left:-1000px; top:0; width:1px; height:1px; opacity:0; border:0; padding:0; margin:0;
+  font-size:16px; pointer-events:none; }
 .mfoot { display:flex; gap:8px; padding:6px 16px 16px; align-items:center; flex:none; flex-wrap:wrap; }
 .note { font-size:12px; color:var(--muted); line-height:1.55; margin:0 0 12px; }
 .note b { color:var(--text); font-weight:500; }

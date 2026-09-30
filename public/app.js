@@ -114,6 +114,72 @@ function eventMinutes(ev, dateStr) {
 }
 
 /* ------------------------------------------------------------------ */
+/* repeating tasks + stacks                                            */
+/* A task with `repeat` is a series. Without a time it keeps a copy in */
+/* the list for each matching day of the coming week (id               */
+/* `${seriesId}-${date}`, so devices never make two); with a time it   */
+/* puts a block on each matching day that is viewed. Duplicates in the */
+/* list stack into one card that moves as one.                         */
+/* ------------------------------------------------------------------ */
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const COPY_DAYS = 7;
+const SKIP_MAX = 400;
+
+const weekday = (s) => dayStart(s).getDay();
+const isSeries = (t) => !!(t && t.repeat && Array.isArray(t.repeat.days) && t.repeat.days.length);
+const isTimedSeries = (t) => isSeries(t) && t.repeat.start != null;
+// true when the rule puts the task on `date`
+const repeatsOn = (rep, date) => !!rep && rep.days.includes(weekday(date)) && (!rep.from || rep.from <= date)
+  && (!rep.until || date <= rep.until) && !(rep.skip || []).includes(date);
+function daysLabel(days) {
+  const ds = [...days].sort((a, b) => a - b);
+  const k = ds.join('');
+  if (k === '0123456') return 'Every day';
+  if (k === '12345') return 'Weekdays';
+  if (k === '06') return 'Weekends';
+  return ds.map((d) => DAY_SHORT[d]).join(' ');
+}
+// "Mon Wed Fri · 11 AM"
+const repeatLabel = (rep) => daysLabel(rep.days) + (rep.start != null ? ` · ${fmt(rep.start)}` : '');
+// the parts of a rule whose change bumps `version` (title, length and color do too; skip days do not)
+const ruleKey = (rep) => JSON.stringify([[...rep.days].sort((a, b) => a - b), rep.start == null ? null : rep.start, rep.from || null, rep.until || null]);
+// "Mon 28"
+const dayChip = (s) => `${DAY_SHORT[weekday(s)]} ${parts(s)[2]}`;
+
+const normTitle = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+// Tasks with the same key stack: a series with its copies, otherwise equal titles.
+const stackKey = (t) => (t.seriesId ? 's:' + t.seriesId : isSeries(t) ? 's:' + t.id : t.unstacked ? 'u:' + t.id : 't:' + normTitle(t.title));
+
+// The active list as units: a task on its own, or a stack shown as one card. `head` is the row
+// or card, `members` the rows under an expanded card, `tasks` everything that moves with it.
+// A series heads its copies; a title stack is headed by its first task, which is also a member.
+function listUnits(active) {
+  const byKey = new Map();
+  const groups = [];
+  active.forEach((t) => {
+    const k = stackKey(t);
+    let g = byKey.get(k);
+    if (!g) { g = { key: k, tasks: [] }; byKey.set(k, g); groups.push(g); }
+    g.tasks.push(t);
+  });
+  return groups.map(({ key, tasks }) => {
+    const series = tasks.find(isSeries) || null;
+    const members = series ? tasks.filter((t) => t !== series) : tasks;
+    return { key, head: series || tasks[0], members, tasks: series ? [series, ...members] : tasks, stacked: series ? members.length > 0 : tasks.length > 1 };
+  });
+}
+// The member a stack dropped on the calendar schedules: the copy for the day in view, else the
+// earliest copy, else the first by order.
+function stackTarget(members, date) {
+  const open = members.filter((t) => !t.done);
+  const dated = open.filter((t) => t.forDate).sort((a, b) => a.forDate.localeCompare(b.forDate));
+  return open.find((t) => t.forDate === date) || dated[0] || open[0] || members[0];
+}
+
+/* ------------------------------------------------------------------ */
 /* layout engine                                                       */
 /* One rule: find two overlapping blocks, move the one that may move,  */
 /* keep moving it the way it first went. Locked blocks and the block   */
@@ -442,6 +508,7 @@ const Ico = {
   export: (p) => svg('M19 12v7H5v-7H3v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7zm-6 .67 2.59-2.58L17 11.5l-5 5-5-5 1.41-1.41L11 12.67V3h2z', p),
   ext: (p) => svg('M14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3zM5 5h5V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5h-2v5H5z', p),
   refresh: (p) => svg('M17.65 6.35A8 8 0 1 0 19.9 13h-2.1a6 6 0 1 1-1.6-5.2L13 11h7V4z', p),
+  repeat: (p) => svg('M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z', p),
 };
 const G = (p) => html`<span className="gicon" ...${p}>G</span>`;
 
@@ -561,6 +628,9 @@ function Planner({ user, onSignOut }) {
   const [todoModal, setTodoModal] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
+  // the date on which the last applied poll started; copies are made only from a fresh list
+  const [syncedOn, setSyncedOn] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [toast, setToast] = useState(null);
   const [now, setNow] = useState(() => new Date());
@@ -595,6 +665,8 @@ function Planner({ user, onSignOut }) {
   const routineOps = useRef({ seq: 0, sugg: new Map(), keys: new Map() });
   const pairAskRef = useRef(null);
   const pollNowRef = useRef(() => {});
+  const sinkRef = useRef(null);
+  const seriesRunRef = useRef(null);
   dateRef.current = dateStr;
   blockModalRef.current = blockModal;
   pairAskRef.current = pairAsk;
@@ -681,9 +753,10 @@ function Planner({ user, onSignOut }) {
       const date = dateRef.current;
       const seqAt = store.seq();
       const routineSeqAt = routineOps.current.seq;
+      const startedOn = todayStr();
       try {
         const p = await store.sync(date);
-        if (!dead) { applyRef.current(p, date, seqAt, routineSeqAt); if (store.failedCount()) store.retryFailed(); }
+        if (!dead) { applyRef.current(p, date, seqAt, routineSeqAt); setSyncedOn(startedOn); if (store.failedCount()) store.retryFailed(); }
       } catch (e) { /* status indicator reports offline / errors */ }
       finally { running = false; if (!dead) schedule(); }
     };
@@ -847,9 +920,12 @@ function Planner({ user, onSignOut }) {
 
   /* ---------------- derived ---------------- */
 
-  const sortedTodos = useMemo(() => [...todos].sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))), [todos]);
+  const sortedTodos = useMemo(() => [...todos].sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.forDate || '').localeCompare(String(b.forDate || ''))
+    || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))), [todos]);
   const activeTodos = useMemo(() => sortedTodos.filter((t) => !t.done), [sortedTodos]);
   const doneTodos = useMemo(() => sortedTodos.filter((t) => t.done), [sortedTodos]);
+  const units = useMemo(() => listUnits(activeTodos), [activeTodos]);
+  const today = todayStr();
   const knownTags = useMemo(() => { const s = new Set(['event']); todos.forEach((t) => { if (t.tag) s.add(t.tag); }); return [...s]; }, [todos]);
   const tagColor = useCallback((tag, own) => own || (tag ? hashColor(tag, colors) : null), [colors]);
   const todoColor = useCallback((t) => t.color || (t.tag ? hashColor(t.tag, colors) : colors[1] || colors[0]), [colors]);
@@ -894,6 +970,7 @@ function Planner({ user, onSignOut }) {
 
   /* ---------------- block creation ---------------- */
 
+  // Returns true when it opened the editor instead of committing.
   const createBlock = (spec, startMin, date) => {
     const dur = spec.duration || DEFAULT_DURATION;
     const block = { id: newId('b'), name: spec.name || '', start: clamp(snap(startMin), 0, DAY_MIN - dur), duration: dur, color: spec.color, locked: false };
@@ -901,16 +978,28 @@ function Planner({ user, onSignOut }) {
     if (spec.tag) block.tag = spec.tag;
     const before = blocksRef.current.map(clone);
     const out = place([...before, block], block.id);
-    if (!out) { say('No room there. A locked block is in the way.'); return; }
+    if (!out) { say('No room there. A locked block is in the way.'); return false; }
     if (spec.duration && spec.name) {
       commitBlocks(date, out);
       if (spec.todoId) linkTodo(spec.todoId, date, block.id);
       say(`${spec.name} · ${fmt(block.start)} – ${fmt(block.start + dur)}`);
-    } else {
-      setBlocks(out);
-      setBlockModal({ mode: 'create', draft: clone(block), revertTo: before, needDuration: !spec.duration, date });
+      return false;
     }
+    setBlocks(out);
+    setBlockModal({ mode: 'create', draft: clone(block), revertTo: before, needDuration: !spec.duration, date });
+    return true;
   };
+
+  // Touch keyboards open only for a focus made inside the user's gesture, and the block editor
+  // mounts after the gesture ends. A drop that will open the editor parks the focus in a hidden
+  // input first (synchronously, before any state update); BlockModal moves it to the title.
+  const holdFocus = () => {
+    const el = sinkRef.current;
+    if (!el) return;
+    el.value = '';
+    el.focus({ preventScroll: true });
+  };
+  const releaseFocus = () => { const el = sinkRef.current; if (el && document.activeElement === el) el.blur(); };
 
   /* ---------------- pointer drag engine ---------------- */
 
@@ -968,8 +1057,8 @@ function Planner({ user, onSignOut }) {
       s.grab = yToMin(s.y0) - t.start;
       setDraggingId(s.id);
     } else if (s.kind === 'todo') {
-      setLiftedTodo(s.todo.id);
-      setProxy({ x: s.x, y: s.y, label: s.todo.title, color: todoColor(s.todo) });
+      setLiftedTodo(s.stack ? 'stack:' + s.stack : s.todo.id);
+      setProxy({ x: s.x, y: s.y, label: s.label || s.todo.title, color: todoColor(s.todo) });
     } else if (s.kind === 'quick') {
       setProxy({ x: s.x, y: s.y, label: s.block.label, color: s.block.color });
     } else if (s.kind === 'color') {
@@ -995,8 +1084,10 @@ function Planner({ user, onSignOut }) {
       return;
     }
     if (s.kind === 'todo' || s.kind === 'quick') {
-      const label = s.kind === 'todo' ? s.todo.title : s.block.label;
-      const dur = (s.kind === 'todo' ? s.todo.duration : s.block.duration) || DEFAULT_DURATION;
+      // a stack schedules one of its members (s.sched); it moves in the list as a whole
+      const item = s.kind === 'todo' ? s.sched || s.todo : s.block;
+      const label = s.kind === 'todo' ? item.title : item.label;
+      const dur = item.duration || DEFAULT_DURATION;
       setProxy((p) => (p ? { ...p, x: s.x, y: s.y } : p));
       if (overGrid(s.x, s.y)) {
         s.over = 'grid';
@@ -1006,7 +1097,7 @@ function Planner({ user, onSignOut }) {
         setInsertAt(null);
       } else if (s.kind === 'todo' && overList(s.x, s.y)) {
         s.over = 'list';
-        s.insert = listInsertIndex(s.y, s.todo.id);
+        s.insert = listInsertIndex(s.y, s.except);
         setInsertAt(s.insert);
         setGhost(null);
       } else { s.over = null; setGhost(null); setInsertAt(null); }
@@ -1061,18 +1152,22 @@ function Planner({ user, onSignOut }) {
       return;
     }
     if (s.kind === 'todo') {
-      const over = s.over, start = s.start, insert = s.insert, todo = s.todo;
+      const over = s.over, start = s.start, insert = s.insert, todo = s.todo, sched = s.sched || s.todo;
+      const live = todosRef.current.find((t) => t.id === sched.id) || sched;
+      if (over === 'grid' && (!live.duration || !live.title)) holdFocus();
       cleanupSession(over === 'grid');
       if (over === 'grid') {
-        const live = todosRef.current.find((t) => t.id === todo.id) || todo;
-        createBlock({ name: live.title, duration: live.duration || null, color: todoColor(live), todoId: live.id, tag: live.tag || null }, start, s.date);
-      } else if (over === 'list') reorderTodo(todo.id, insert);
+        if (!createBlock({ name: live.title, duration: live.duration || null, color: todoColor(live), todoId: live.id, tag: live.tag || null }, start, s.date)) releaseFocus();
+      } else if (over === 'list') {
+        if (s.member) detachTodo(todo, insert); else reorderTodo(todo.id, insert);
+      }
       return;
     }
     if (s.kind === 'quick') {
       const over = s.over, start = s.start, qb = s.block;
+      if (over === 'grid') holdFocus();
       cleanupSession(over === 'grid');
-      if (over === 'grid') createBlock({ name: '', duration: qb.duration, color: qb.color }, start, s.date);
+      if (over === 'grid' && !createBlock({ name: '', duration: qb.duration, color: qb.color }, start, s.date)) releaseFocus();
       return;
     }
     if (s.kind === 'color') {
@@ -1118,35 +1213,178 @@ function Planner({ user, onSignOut }) {
     if (openEditor) setTodoModal({ todo: clone(t), focus: 'duration' });
   };
 
-  const reorderTodo = (id, insert) => {
-    const list = activeTodos;
-    const dragged = list.find((t) => t.id === id);
-    if (!dragged) return;
-    const others = list.filter((t) => t.id !== id);
+  // The list is ordered by unit (a task, or a stack that moves as one). Put `moving` (tasks, in
+  // order) at unit position `insert`, with consecutive orders in the gap before the next unit's
+  // first task. `force` saves them even if the unit did not move (a member leaving its stack).
+  const placeTasks = (moving, insert, force) => {
+    const ids = new Set(moving.map((t) => t.id));
+    const cur = units.findIndex((u) => u.tasks.every((t) => ids.has(t.id)));
+    const others = units.map((u) => u.tasks.filter((t) => !ids.has(t.id))).filter((ts) => ts.length);
     const idx = clamp(insert, 0, others.length);
-    const before = others[idx - 1];
-    const after = others[idx];
-    let order;
-    if (!before && !after) return;
-    else if (!before) order = (after.order || 0) - 1000;
-    else if (!after) order = (before.order || 0) + 1000;
-    else order = ((before.order || 0) + (after.order || 0)) / 2;
-    if (before && after && Math.abs((after.order || 0) - (before.order || 0)) < 1e-6) {
-      const seq = [...others.slice(0, idx), dragged, ...others.slice(idx)];
-      seq.forEach((t, i) => saveTodo({ ...t, order: (i + 1) * 1000 }));
+    if (!force && (others.length === 0 || cur === idx)) return;
+    const first = (ts) => Math.min(...ts.map((t) => t.order || 0));
+    const lo = idx > 0 ? first(others[idx - 1]) : null;
+    const hi = idx < others.length ? first(others[idx]) : null;
+    const k = moving.length;
+    let orders;
+    if (lo === null && hi === null) orders = moving.map((_, i) => (i + 1) * 1000);
+    else if (lo === null) orders = moving.map((_, i) => hi - 1000 * (k - i));
+    else if (hi === null) orders = moving.map((_, i) => lo + 1000 * (i + 1));
+    else if ((hi - lo) / (k + 1) >= 1e-6) orders = moving.map((_, i) => lo + ((hi - lo) * (i + 1)) / (k + 1));
+    else {
+      // no room left between the neighbours: renumber the whole list
+      const seq = [...others.slice(0, idx), moving, ...others.slice(idx)].flat();
+      seq.forEach((t, i) => { const order = (i + 1) * 1000; if (ids.has(t.id) || t.order !== order) saveTodo({ ...t, order }); });
       return;
     }
-    if (order === dragged.order) return;
-    saveTodo({ ...dragged, order });
+    moving.forEach((t, i) => { if (force || t.order !== orders[i]) saveTodo({ ...t, order: orders[i] }); });
+  };
+  const reorderTodo = (id, insert) => {
+    const u = units.find((x) => x.head.id === id);
+    if (u) placeTasks(u.tasks, insert, false);
   };
   const nudgeTodo = (id, dir) => {
-    const list = activeTodos;
-    const i = list.findIndex((t) => t.id === id);
+    const i = units.findIndex((u) => u.head.id === id);
     const j = i + dir;
-    if (i < 0 || j < 0 || j >= list.length) return;
-    reorderTodo(id, dir < 0 ? j : j + 1);
+    if (i < 0 || j < 0 || j >= units.length) return;
+    reorderTodo(id, j);
   };
+  // A member dragged out of its stack becomes an item of its own at the drop position. A copy
+  // stops being one, and its day is skipped so the repeating task does not make it again.
+  const detachTodo = (t, insert) => {
+    const live = todosRef.current.find((x) => x.id === t.id);
+    if (!live || live.done) return;
+    const next = { ...live, unstacked: true };
+    if (live.seriesId) {
+      delete next.seriesId; delete next.forDate;
+      if (live.forDate) skipSeriesDate(live.seriesId, live.forDate);
+    }
+    placeTasks([next], insert, true);
+  };
+  const toggleStack = (key) => setExpanded((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const toggleDone = (t) => saveTodo({ ...t, done: !t.done, order: t.done ? ((activeTodos[activeTodos.length - 1] || {}).order || 0) + 1000 : t.order });
+
+  /* ---------------- repeating tasks ---------------- */
+
+  // No copy or block is made again for a day on the series' skip list.
+  const skipSeriesDate = (seriesId, date) => {
+    const s = todosRef.current.find((x) => x.id === seriesId);
+    if (!s || !isSeries(s) || !isValidDate(date)) return;
+    const skip = s.repeat.skip || [];
+    if (skip.includes(date)) return;
+    saveTodo({ ...s, repeat: { ...s.repeat, skip: [...skip, date].sort().slice(-SKIP_MAX) } });
+  };
+
+  // From the task editor. A copy's day is skipped first; a series takes its copies that are not
+  // done with it (blocks it made stay where they are).
+  const deleteTodo = (t) => {
+    const live = todosRef.current.find((x) => x.id === t.id) || t;
+    setTodoModal(null);
+    if (live.seriesId && live.forDate) skipSeriesDate(live.seriesId, live.forDate);
+    const copies = isSeries(live) ? todosRef.current.filter((x) => x.seriesId === live.id && !x.done) : [];
+    removeTodo(live.id);
+    copies.forEach((c) => removeTodo(c.id));
+  };
+
+  // After a series is edited, its copies from today on that are not done follow its title, tag,
+  // length and color; those the rule no longer covers are removed (all of them once it has a time
+  // or stops repeating).
+  const syncCopies = (s) => {
+    const rep = isSeries(s) && s.repeat.start == null ? s.repeat : null;
+    const want = { title: s.title, tag: s.tag || null, duration: s.duration || null, color: s.color || null };
+    todosRef.current.filter((c) => c.seriesId === s.id && !c.done && c.forDate && c.forDate >= todayStr()).forEach((c) => {
+      if (!rep || !repeatsOn(rep, c.forDate)) removeTodo(c.id);
+      else if (Object.keys(want).some((k) => (c[k] || null) !== want[k])) saveTodo({ ...c, ...want });
+    });
+  };
+
+  const saveFromEditor = () => {
+    const t = todoModal.todo;
+    const title = (t.title || '').trim();
+    if (!title) { say('Give the task a name.'); return; }
+    const next = { ...t, title, tag: t.tag ? String(t.tag).trim().toLowerCase().replace(/^#/, '') || null : null };
+    const prev = todosRef.current.find((x) => x.id === t.id) || null;
+    const old = prev && isSeries(prev) ? prev.repeat : null;
+    if (isSeries(next)) {
+      const r = next.repeat;
+      if (r.until && r.until < r.from) { say('The repeat ends before it starts.'); return; }
+      const changed = !old || ruleKey(old) !== ruleKey(r) || prev.title !== title || (prev.duration || null) !== (next.duration || null)
+        || (prev.color || null) !== (next.color || null);
+      // skip days come from the stored task: another device may have added one while this was open
+      next.repeat = { days: [...r.days].sort((a, b) => a - b), start: r.start == null ? null : r.start, from: r.from, until: r.until || null,
+        skip: (old ? old.skip : r.skip) || [], version: old ? (old.version || 1) + (changed ? 1 : 0) : 1 };
+      next.done = false;
+    } else delete next.repeat;
+    const saved = saveTodo(next);
+    if (old) syncCopies(saved);
+    setTodoModal(null);
+  };
+
+  // Copies of each series without a time: one per matching day from today through six days out.
+  // Idempotent: a copy that exists here (done or not), is being written, or is being deleted is
+  // left alone. Runs only on a list fresh from a poll started today, so a device waking up does
+  // not remake a copy another device finished or deleted meanwhile.
+  const ensureSeriesCopies = (day0) => {
+    const all = todosRef.current;
+    const have = new Set(all.map((t) => t.id));
+    all.forEach((s) => {
+      if (!isSeries(s) || s.repeat.start != null || s.done) return;
+      for (let i = 0; i < COPY_DAYS; i++) {
+        const d = shiftDate(day0, i);
+        const id = `${s.id}-${d}`;
+        const path = 'todos/' + id;
+        if (!repeatsOn(s.repeat, d) || id.length > 80 || have.has(id) || store.inFlight(path) || store.isPendingDelete(path)) continue;
+        have.add(id);
+        saveTodo({ id, seriesId: s.id, forDate: d, title: s.title, tag: s.tag || null, duration: s.duration || null, color: s.color || null,
+          order: s.order || 0, done: false, scheduled: [], createdAt: nowIso() });
+      }
+    });
+  };
+  useEffect(() => {
+    if (todosLoaded && syncedOn === today) ensureSeriesCopies(today);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todos, todosLoaded, syncedOn, today]);
+
+  // Blocks for each series with a time on the day in view, placed like any block. A block from an
+  // older version of the rule catches up from today on; a past day is left as it was. Runs once
+  // per (date, revisions of those series), never over a drag, an open block editor, or a save of
+  // this day still on its way. Declared after the effect that resets the day on a date change,
+  // so it never sees the previous day's blocks under the new date.
+  const ensureSeriesBlocks = () => {
+    const date = dateRef.current;
+    const path = 'days/' + date;
+    if (!dayLoadedRef.current || !todosLoadedRef.current || blockModalRef.current || store.inFlight(path) || store.hasFailed(path)) return;
+    if (dragRef.current && dragRef.current.started) return;
+    const series = todosRef.current.filter((t) => isTimedSeries(t) && !t.done);
+    const key = date + '|' + series.map((t) => `${t.id}:${t.rev}`).sort().join(',');
+    if (seriesRunRef.current === key) return;
+    seriesRunRef.current = key;
+    let list = blocksRef.current.map(clone);
+    let changed = false;
+    const missed = [];
+    series.forEach((t) => {
+      if (!repeatsOn(t.repeat, date)) return;
+      const start = t.repeat.start;
+      const want = { name: t.title, start, duration: Math.min(t.duration || DEFAULT_DURATION, DAY_MIN - start), color: todoColor(t), seriesVersion: t.repeat.version };
+      const cur = list.find((b) => b.todoId === t.id && b.seriesDate === date);
+      let block;
+      if (cur) {
+        if ((cur.seriesVersion || 0) >= t.repeat.version || date < todayStr()) return;
+        block = { ...cur, ...want };
+      } else {
+        block = { id: newId('b'), ...want, locked: false, todoId: t.id, seriesDate: date };
+        if (t.tag) block.tag = t.tag;
+      }
+      const out = place([...list.filter((b) => b.id !== block.id), block], block.id);
+      if (out) { list = out; changed = true; } else missed.push(`"${t.title}"`);
+    });
+    if (changed) commitBlocks(date, list);
+    if (missed.length) say(`No room for ${missed.join(', ')} on this day. A locked block is in the way.`);
+  };
+  useEffect(() => {
+    ensureSeriesBlocks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, dateStr, todos, blocks, blockModal, status]);
 
   /* ---------------- block modal ---------------- */
 
@@ -1166,6 +1404,8 @@ function Planner({ user, onSignOut }) {
   const deleteBlock = (id) => {
     const b = blocksRef.current.find((t) => t.id === id);
     setBlockModal(null);
+    // a series block: skip the day (written first) so the rule does not put it back
+    if (b && b.todoId && b.seriesDate) skipSeriesDate(b.todoId, b.seriesDate);
     commitBlocks(dateRef.current, blocksRef.current.filter((t) => t.id !== id));
     unlinkBlock(b);
   };
@@ -1369,32 +1609,79 @@ function Planner({ user, onSignOut }) {
   const syncTitle = status.offline ? 'No connection. Changes are kept here and retried.' : status.error ? String(status.error.message || 'Save failed') : 'Changes sync to every device you sign in on.';
   const initials = (user.name || user.email || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
-  const TodoRow = (t, i, list) => {
-    const col = todoColor(t);
+  // Chips under a title. A card shows its head's tag, length and repeat rule, not dates or days.
+  const todoMeta = (t, card) => {
+    const sched = card ? [] : (t.scheduled || []).slice(-2);
+    const copyDay = !card && t.forDate && isValidDate(t.forDate) ? t.forDate : null;
+    const series = isSeries(t);
+    if (!(copyDay || t.tag || t.duration || series || sched.length)) return null;
     return html`
-      <div key=${t.id} data-todo-id=${t.id} className=${'todo' + (t.done ? ' done' : '') + (liftedTodo === t.id ? ' lifted' : '')}
-        onPointerDown=${(e) => startSession(e, { kind: 'todo', todo: t })}>
+      <div className="meta">
+        ${copyDay && html`<span className="chip fordate" title=${prettyDate(copyDay)}>${dayChip(copyDay)}</span>`}
+        ${t.tag && html`<span className="chip tag" style=${{ background: todoColor(t) }}>${t.tag}</span>`}
+        ${t.duration && html`<span className="chip"><${Ico.clock} />${durLabel(t.duration)}</span>`}
+        ${series && html`<span className="chip rep" title=${'Repeats ' + repeatLabel(t.repeat)}><${Ico.repeat} /><span className="ell">${repeatLabel(t.repeat)}</span></span>`}
+        ${sched.map((s) => html`
+          <button key=${s.blockId} className="chip sched" title="Go to that day" onClick=${(e) => { e.stopPropagation(); if (isValidDate(s.date)) setDateStr(s.date); }}>
+            <${Ico.cal} />${shortDate(s.date)}
+          </button>`)}
+      </div>`;
+  };
+
+  // A row: a task on its own (`pos` = [index, count] of the units, for the nudge buttons), a
+  // done task, or a member under an expanded stack (`member` = the stack's key). A series has no
+  // checkbox: it cannot be done (one done elsewhere keeps its box, to be undone).
+  const TodoRow = (t, o) => {
+    const member = !!o.member;
+    return html`
+      <div key=${t.id} data-todo-id=${member ? undefined : t.id} data-member-id=${member ? t.id : undefined}
+        className=${'todo' + (member ? ' member' : '') + (t.done ? ' done' : '') + (liftedTodo === t.id ? ' lifted' : '')}
+        onPointerDown=${(e) => startSession(e, { kind: 'todo', todo: t, member: o.member || null, except: member ? null : t.id })}>
         <span className="grip"><${Ico.grip} /></span>
-        <input className="chk" type="checkbox" checked=${!!t.done} aria-label=${t.done ? 'Mark not done' : 'Mark done'} onChange=${() => toggleDone(t)} />
+        ${(!isSeries(t) || t.done) && html`<input className="chk" type="checkbox" checked=${!!t.done} aria-label=${t.done ? 'Mark not done' : 'Mark done'} onChange=${() => toggleDone(t)} />`}
         <div className="main">
           <div className="title">${t.title}</div>
-          ${(t.tag || t.duration || (t.scheduled && t.scheduled.length)) ? html`
-            <div className="meta">
-              ${t.tag && html`<span className="chip tag" style=${{ background: col }}>${t.tag}</span>`}
-              ${t.duration && html`<span className="chip"><${Ico.clock} />${durLabel(t.duration)}</span>`}
-              ${(t.scheduled || []).slice(-2).map((s) => html`
-                <button key=${s.blockId} className="chip sched" title="Go to that day" onClick=${(e) => { e.stopPropagation(); if (isValidDate(s.date)) setDateStr(s.date); }}>
-                  <${Ico.cal} />${shortDate(s.date)}
-                </button>`)}
-            </div>` : null}
+          ${todoMeta(t, false)}
         </div>
-        ${!t.done && html`
+        ${!t.done && o.pos && html`
           <div className="ud">
-            <button aria-label="Move up" disabled=${i === 0} onClick=${() => nudgeTodo(t.id, -1)}><${Ico.up} /></button>
-            <button aria-label="Move down" disabled=${i === list.length - 1} onClick=${() => nudgeTodo(t.id, 1)}><${Ico.down} /></button>
+            <button aria-label="Move up" disabled=${o.pos[0] === 0} onClick=${() => nudgeTodo(t.id, -1)}><${Ico.up} /></button>
+            <button aria-label="Move down" disabled=${o.pos[0] === o.pos[1] - 1} onClick=${() => nudgeTodo(t.id, 1)}><${Ico.down} /></button>
           </div>`}
       </div>`;
   };
+
+  // A stack of two or more: one card (the head) that drags, nudges and schedules as one, with its
+  // members listed under it when expanded. `data-todo-id` on the head makes it one list item.
+  const StackCard = (u, i, n) => {
+    const h = u.head;
+    const open = expanded.has(u.key);
+    const count = u.members.length;
+    return html`
+      <div key=${u.key} data-stack=${u.key} className=${'stack' + (open ? ' open' : '') + (liftedTodo === 'stack:' + u.key ? ' lifted' : '')}>
+        <div data-todo-id=${h.id} className="todo stack-head"
+          onPointerDown=${(e) => startSession(e, { kind: 'todo', todo: h, stack: u.key, sched: stackTarget(u.members, dateStr), except: h.id, label: `${h.title} ×${count}` })}>
+          <span className="grip"><${Ico.grip} /></span>
+          <div className="main">
+            <div className="title">${h.title}<span className="xn" title=${count + (isSeries(h) ? (count === 1 ? ' copy' : ' copies') : ' tasks')}>×${count}</span></div>
+            ${todoMeta(h, true)}
+          </div>
+          <button className="exp" aria-expanded=${open} aria-label=${(open ? 'Collapse ' : 'Expand ') + h.title} onClick=${() => toggleStack(u.key)}>
+            <${Ico.chev} style=${{ transform: open ? 'none' : 'rotate(-90deg)' }} />
+          </button>
+          <div className="ud">
+            <button aria-label="Move up" disabled=${i === 0} onClick=${() => nudgeTodo(h.id, -1)}><${Ico.up} /></button>
+            <button aria-label="Move down" disabled=${i === n - 1} onClick=${() => nudgeTodo(h.id, 1)}><${Ico.down} /></button>
+          </div>
+        </div>
+        ${open && u.members.map((m) => TodoRow(m, { member: u.key }))}
+      </div>`;
+  };
+
+  // the task editor's view of the live list
+  const modalLive = todoModal ? todos.find((t) => t.id === todoModal.todo.id) || null : null;
+  const modalSeries = todoModal && todoModal.todo.seriesId ? todos.find((t) => t.id === todoModal.todo.seriesId && isSeries(t)) || null : null;
+  const modalCopies = modalLive && isSeries(modalLive) ? todos.filter((t) => t.seriesId === modalLive.id && !t.done).length : 0;
 
   return html`
     <div className="app">
@@ -1522,15 +1809,15 @@ function Planner({ user, onSignOut }) {
               <div className="side-list" ref=${listRef}>
                 ${!todosLoaded && html`<div className="empty-list">Loading tasks…</div>`}
                 ${todosLoaded && activeTodos.length === 0 && html`<div className="empty-list">No tasks yet. Add one above, then drag it onto the calendar or reorder it by priority.</div>`}
-                ${activeTodos.map((t, i) => TodoRow(t, i, activeTodos))}
-                ${insertAt !== null && liftedTodo && InsertLine(listRef, insertAt, liftedTodo)}
+                ${units.map((u, i) => (u.stacked ? StackCard(u, i, units.length) : TodoRow(u.head, { pos: [i, units.length] })))}
+                ${insertAt !== null && liftedTodo && InsertLine(listRef, insertAt, dragRef.current ? dragRef.current.except : null)}
                 ${doneTodos.length > 0 && html`
                   <div className="section">
                     <button onClick=${() => setShowDone((v) => !v)} aria-expanded=${showDone}>
                       <${Ico.chev} style=${{ transform: showDone ? 'none' : 'rotate(-90deg)' }} />Done <span className="count">${doneTodos.length}</span>
                     </button>
                   </div>`}
-                ${showDone && doneTodos.map((t, i) => TodoRow(t, i, doneTodos))}
+                ${showDone && doneTodos.map((t) => TodoRow(t, {}))}
               </div>
               <div className="quick">
                 <h4>Quick blocks</h4>
@@ -1585,7 +1872,7 @@ function Planner({ user, onSignOut }) {
                       <button className=${'lk' + (t.locked ? ' on' : '')} title=${t.locked ? 'Unlock this block' : 'Lock this block in place'} aria-label=${t.locked ? 'Unlock' : 'Lock'}
                         onClick=${(e) => { e.stopPropagation(); toggleLock(t.id); }}>${t.locked ? html`<${Ico.lock} />` : html`<${Ico.unlock} />`}</button>
                       ${tight ? html`<div className="nm">${t.name || 'Untitled'} <span className="tnum" style=${{ fontWeight: 400, opacity: 0.85 }}>${fmt(t.start)}</span></div>` : html`
-                        <div className="nm">${t.name || 'Untitled'}${t.tag ? html`<span className="tg">${t.tag}</span>` : null}${t.gcalId ? html`<span className="gm">G</span>` : null}</div>
+                        <div className="nm">${t.name || 'Untitled'}${t.tag ? html`<span className="tg">${t.tag}</span>` : null}${t.gcalId ? html`<span className="gm">G</span>` : null}${t.seriesDate ? html`<span className="gm rp" title="Repeating task"><${Ico.repeat} /></span>` : null}</div>
                         <div className="tm tnum">${fmt(t.start)} – ${fmt(t.start + t.duration)}</div>`}
                     </div>`;
                 })}
@@ -1612,17 +1899,13 @@ function Planner({ user, onSignOut }) {
           onPush=${pushToGoogle} onRemoveGoogle=${removeFromGoogle} />`}
 
       ${todoModal && html`
-        <${TodoModal} draft=${todoModal.todo} colors=${colors} knownTags=${knownTags} tagColor=${tagColor} focus=${todoModal.focus}
+        <${TodoModal} key=${todoModal.todo.id} draft=${todoModal.todo} colors=${colors} knownTags=${knownTags} tagColor=${tagColor} focus=${todoModal.focus}
+          series=${modalSeries} copyCount=${modalCopies}
           onChange=${(patch) => setTodoModal((m) => ({ ...m, todo: { ...m.todo, ...patch } }))}
           onCancel=${() => setTodoModal(null)}
-          onSave=${() => {
-            const t = todoModal.todo;
-            const title = (t.title || '').trim();
-            if (!title) { say('Give the task a name.'); return; }
-            saveTodo({ ...t, title, tag: t.tag ? String(t.tag).trim().toLowerCase().replace(/^#/, '') || null : null });
-            setTodoModal(null);
-          }}
-          onDelete=${() => { removeTodo(todoModal.todo.id); setTodoModal(null); }} />`}
+          onSave=${saveFromEditor}
+          onDelete=${() => deleteTodo(todoModal.todo)}
+          onEditSeries=${() => { if (modalSeries) setTodoModal({ todo: clone(modalSeries) }); }} />`}
 
       ${gPopover && html`<${GoogleEventModal} ev=${gPopover} date=${dateStr} busy=${gBusy} onImport=${() => importEvent(gPopover)} onDelete=${() => deleteGoogleEvent(gPopover)} onClose=${() => setGPopover(null)} />`}
 
@@ -1661,6 +1944,8 @@ function Planner({ user, onSignOut }) {
         <div className=${'proxy' + (proxy.swatch ? ' swatch' : '')} style=${proxy.swatch ? { left: proxy.x, top: proxy.y, background: proxy.swatch } : { left: proxy.x, top: proxy.y, borderColor: proxy.color }}>${proxy.swatch ? null : proxy.label}</div>`}
 
       ${toast && html`<div className="toast" role="status">${toast}</div>`}
+
+      <input ref=${sinkRef} className="focus-sink" type="text" aria-hidden="true" tabIndex=${-1} autoComplete="off" />
     </div>`;
 }
 
@@ -1671,7 +1956,12 @@ function InsertLine(listRef, index, exceptId) {
   const lr = list.getBoundingClientRect();
   let y;
   if (items.length === 0) y = 8;
-  else if (index >= items.length) { const r = items[items.length - 1].getBoundingClientRect(); y = r.bottom - lr.top + list.scrollTop + 3; }
+  else if (index >= items.length) {
+    // below the last item, including the members of an expanded stack
+    const last = items[items.length - 1];
+    const r = (last.closest('[data-stack]') || last).getBoundingClientRect();
+    y = r.bottom - lr.top + list.scrollTop + 3;
+  }
   else { const r = items[index].getBoundingClientRect(); y = r.top - lr.top + list.scrollTop - 4; }
   return html`<div className="insert" style=${{ top: y }}></div>`;
 }
@@ -1684,7 +1974,16 @@ function BlockModal({ modal, colors, todo, google, gBusy, onChange, onCancel, on
   const d = modal.draft;
   const inputRef = useRef(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  useEffect(() => { if (inputRef.current && !modal.needDuration) inputRef.current.focus(); }, [modal.needDuration]);
+  // Title focused on open in every mode, caret at the end, text not selected. After a drop the
+  // focus is waiting in the planner's hidden input, so a touch keyboard is already up.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const n = el.value.length;
+    el.setSelectionRange(n, n);
+  }, [d.id]);
+  const series = isSeries(todo);
   const end = d.start + d.duration;
   const setStart = (v) => { const s = clamp(fromHHMM(v), 0, DAY_MIN - SNAP); onChange({ start: s, duration: clamp(d.duration, SNAP, DAY_MIN - s) }); };
   const setEnd = (v) => { let e = fromHHMM(v); if (e <= d.start) e = Math.min(d.start + SNAP, DAY_MIN); onChange({ duration: e - d.start }); };
@@ -1695,7 +1994,7 @@ function BlockModal({ modal, colors, todo, google, gBusy, onChange, onCancel, on
       <div className="modal" onPointerDown=${(e) => e.stopPropagation()}>
         <div className="mhead"><h2>${modal.mode === 'create' ? (modal.needDuration ? 'How long?' : 'New block') : 'Edit block'}</h2><button className="x" onClick=${onCancel} aria-label="Close"><${Ico.close} /></button></div>
         <div className="mbody">
-          ${todo && html`<div className="fromtask">From task <b>${todo.title}</b>${!todo.done && html`<button className="btn" style=${{ height: 28 }} onClick=${() => onMarkDone(todo)}><${Ico.check} /> Done</button>`}</div>`}
+          ${todo && html`<div className="fromtask">${series ? 'From repeating task' : 'From task'} <b>${todo.title}</b>${!todo.done && !series && html`<button className="btn" style=${{ height: 28 }} onClick=${() => onMarkDone(todo)}><${Ico.check} /> Done</button>`}</div>`}
           ${d.gcalId && html`
             <div className="gcalrow"><span className="gicon">G</span><span>In <b>Google Calendar</b>${d.locked ? ' · locked' : ''}</span>
               <span className="right">
@@ -1719,7 +2018,7 @@ function BlockModal({ modal, colors, todo, google, gBusy, onChange, onCancel, on
           <label className="check"><input type="checkbox" checked=${!!d.locked} onChange=${(e) => onChange({ locked: e.target.checked })} /><span>Lock this block<span className="sub"> · other blocks move around it, it never moves</span></span></label>
         </div>
         <div className="mfoot">
-          ${modal.mode === 'edit' && html`<button className="btn danger" onClick=${onDelete}>Delete</button>`}
+          ${modal.mode === 'edit' && html`<button className="btn danger" onClick=${onDelete} title=${d.seriesDate ? 'Remove this block and leave this day out of the repeating task' : null}>${d.seriesDate ? 'Skip this day' : 'Delete'}</button>`}
           ${gOn && !d.gcalId && html`<button className="btn google" disabled=${gBusy} onClick=${onPush} title="Create this block as an event in Google Calendar and lock it">${gBusy ? html`<span className="spin"></span>` : html`<${G} />`} Add to Google</button>`}
           <span className="spacer"></span>
           <button className="btn" onClick=${onCancel}>Cancel</button>
@@ -1764,7 +2063,7 @@ function GoogleEventModal({ ev, date, busy, onImport, onDelete, onClose }) {
 /* to-do modal                                                         */
 /* ------------------------------------------------------------------ */
 
-function TodoModal({ draft, colors, knownTags, tagColor, focus, onChange, onCancel, onSave, onDelete }) {
+function TodoModal({ draft, colors, knownTags, tagColor, focus, series, copyCount, onChange, onCancel, onSave, onDelete, onEditSeries }) {
   const d = draft;
   const inputRef = useRef(null);
   const durRef = useRef(null);
@@ -1774,11 +2073,31 @@ function TodoModal({ draft, colors, knownTags, tagColor, focus, onChange, onCanc
   }, [focus]);
   const [custom, setCustom] = useState(d.duration && !DUR_CHIPS.includes(d.duration) ? String(d.duration) : '');
   const setDur = (m) => { onChange({ duration: m }); setCustom(m && !DUR_CHIPS.includes(m) ? String(m) : ''); };
+  // a series with copies not done asks once more before deleting them with it
+  const [armDelete, setArmDelete] = useState(false);
+  const rep = isSeries(d) ? d.repeat : null;
+  // turning every day off and one back on keeps the time and dates chosen before
+  const lastRep = useRef(rep);
+  if (rep) lastRep.current = rep;
+  const setRep = (patch) => onChange({ repeat: { ...rep, ...patch } });
+  const toggleDay = (i) => {
+    const days = rep ? rep.days : [];
+    const next = days.includes(i) ? days.filter((x) => x !== i) : [...days, i].sort((a, b) => a - b);
+    if (!next.length) { onChange({ repeat: null }); return; }
+    const base = rep || lastRep.current || { start: null, from: todayStr(), until: null, skip: [], version: 1 };
+    onChange({ repeat: { ...base, days: next } });
+  };
+  const setAt = (v) => setRep({ start: v ? clamp(Math.round(fromHHMM(v) / 5) * 5, 0, DAY_MIN - 5) : null });
   return html`
     <div className="scrim" onPointerDown=${onCancel}>
       <div className="modal" onPointerDown=${(e) => e.stopPropagation()}>
         <div className="mhead"><h2>Task</h2><button className="x" onClick=${onCancel} aria-label="Close"><${Ico.close} /></button></div>
         <div className="mbody">
+          ${d.seriesId && html`
+            <div className="fromtask">
+              <span>Copy of a repeating task for <b>${isValidDate(d.forDate || '') ? prettyDate(d.forDate) : 'another day'}</b></span>
+              ${series && html`<button className="btn" style=${{ height: 28 }} onClick=${onEditSeries}><${Ico.repeat} /> Edit the repeating task</button>`}
+            </div>`}
           <div className="field"><input ref=${inputRef} id="todotitle" className="text" placeholder="What needs doing?" value=${d.title || ''} onChange=${(e) => onChange({ title: e.target.value })} onKeyDown=${(e) => e.key === 'Enter' && onSave()} /></div>
           <div className="field"><label htmlFor="todotag">Tag</label>
             <input id="todotag" className="inp" list="taglist" placeholder="event, errand, call…" value=${d.tag || ''} onChange=${(e) => onChange({ tag: e.target.value })} autoComplete="off" />
@@ -1803,10 +2122,37 @@ function TodoModal({ draft, colors, knownTags, tagColor, focus, onChange, onCanc
               ${colors.map((c) => html`<button key=${c} className=${'dot' + (c === d.color ? ' sel' : '')} style=${{ background: c, cursor: 'pointer' }} aria-label=${'Use ' + c} onClick=${() => onChange({ color: c })}></button>`)}
             </div>
           </div>
-          <label className="check"><input type="checkbox" checked=${!!d.done} onChange=${(e) => onChange({ done: e.target.checked })} /><span>Done</span></label>
+          ${!d.seriesId && html`
+            <${Fragment}>
+              <div className="field"><span className="lbl">Repeat${rep ? ' · ' + repeatLabel(rep) : ''}</span>
+                <div className="chips weekdays">
+                  ${DAY_LETTERS.map((l, i) => {
+                    const on = !!rep && rep.days.includes(i);
+                    return html`<button key=${i} type="button" className=${'chipbtn' + (on ? ' on' : '')} aria-pressed=${on} aria-label=${DAY_NAMES[i]} title=${DAY_NAMES[i]} onClick=${() => toggleDay(i)}>${l}</button>`;
+                  })}
+                </div>
+              </div>
+              ${rep && html`
+                <${Fragment}>
+                  <div className="field"><label htmlFor="todoat">At</label>
+                    <div className="chips">
+                      <input id="todoat" className="inp tnum" type="time" step="300" value=${rep.start == null ? '' : toHHMM(rep.start)} style=${{ width: 130, height: 28 }} onChange=${(e) => setAt(e.target.value)} />
+                      <button type="button" className=${'chipbtn' + (rep.start == null ? ' on' : '')} aria-pressed=${rep.start == null} onClick=${() => setRep({ start: rep.start == null ? 9 * 60 : null })}>No set time</button>
+                    </div>
+                    <div className="hint">With a time it goes on the calendar on those days. Without one, a copy appears in your list for each of those days.</div>
+                  </div>
+                  <div className="field row">
+                    <div><label htmlFor="todofrom">From</label><input id="todofrom" className="inp" type="date" value=${rep.from} onChange=${(e) => { if (isValidDate(e.target.value)) setRep({ from: e.target.value }); }} /></div>
+                    <div><label htmlFor="todountil">Until</label><input id="todountil" className="inp" type="date" min=${rep.from} value=${rep.until || ''} onChange=${(e) => setRep({ until: isValidDate(e.target.value) ? e.target.value : null })} /></div>
+                  </div>
+                <//>`}
+            <//>`}
+          ${!rep && html`<label className="check"><input type="checkbox" checked=${!!d.done} onChange=${(e) => onChange({ done: e.target.checked })} /><span>Done</span></label>`}
         </div>
         <div className="mfoot">
-          <button className="btn danger" onClick=${onDelete}>Delete</button>
+          <button className="btn danger" onClick=${() => { if (copyCount > 0 && !armDelete) setArmDelete(true); else onDelete(); }}>
+            ${armDelete ? `Delete task and its ${copyCount} upcoming ${copyCount === 1 ? 'copy' : 'copies'}` : 'Delete'}
+          </button>
           <span className="spacer"></span>
           <button className="btn" onClick=${onCancel}>Cancel</button>
           <button className="btn primary" onClick=${onSave}>Save</button>
