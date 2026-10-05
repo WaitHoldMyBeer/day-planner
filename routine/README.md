@@ -179,6 +179,9 @@ A course site's list of upcoming work holds only what the instructor entered the
 handed in somewhere else, such as questions before each class on a form, is often stated only in
 the syllabus and on a schedule page. So the routine:
 
+- reads which lecture and discussion section you are in from the course list, and uses that
+  section's column whenever a course gives dates per section. A course shell's name ends in a
+  number for everyone and is not your section;
 - lists what each course links to on every run (`canvas-modules.js`, `canvas-course.js`);
 - reads the syllabus and the schedule in full when it has no record of them or they changed,
   through Canvas's own document viewer, downloading nothing;
@@ -188,6 +191,9 @@ the syllabus and on a schedule page. So the routine:
 - names in the brief's questions any outside site a course links to that you have not listed.
 
 It never opens a form, a quiz or a submission page. It gives you the link.
+
+An assumption about you is never reported as a fact. If a date depends on something the routine
+could not read anywhere, the item says so and gives each alternative.
 
 A sign of work that is not accounted for, such as an unfamiliar name for an assignment, is a lead.
 A lead is followed in the same run or put to you as a question. It is not carried from one day

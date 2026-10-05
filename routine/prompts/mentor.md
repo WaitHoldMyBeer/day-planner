@@ -107,6 +107,7 @@ withholds.
 | Wrong date or fact | `due`, course, sender or requirement differs from the source. Timezone slips are common. |
 | False duplicate | Flagged as a duplicate of a to-do that is a different piece of work |
 | Missed duplicate | Reported as new although the to-do list or the suggestions already hold the same work |
+| Assumption stated as fact | An item or a line of the summary gives as the owner's something that rests on a guess about them (their section, group or role), or depends on an open question in `questions.md` and does not say so. Check every per-section date against the owner's section in `memory/courses.md` and in the site's enrollment data. |
 | Lead not followed | A sign of unaccounted work (an unfamiliar name for an assignment, "see the schedule page", an unread syllabus) that the routine agent wrote down and did not pursue or raise as a question |
 | Course not known | A course with no record in `memory/courses.md`, or a document that changed since it was read |
 | Stale | Reported although the owner accepted or dismissed it and nothing changed |
@@ -217,6 +218,9 @@ Keep what the owner has to read small and free of contradiction.
   the document it came from, merge it in: the documents and the date each was read, the work that
   recurs, test dates, where work is handed in, the late rule. At most 25 lines per course. Drop a
   course when it is no longer among the owner's courses.
+- Before a question stays open another day, try to answer it from the sources. Which section the
+  owner is in, when a course meets, whether a course was dropped: sites and local inputs usually
+  say. A question the sources could have answered is a defect of yours.
 - `questions.md`: open questions for the owner. Add a question only if its answer would change
   later runs and it is not already there. Remove questions the owner has answered (the answers
   show up as changes to `sources.md`, as notes, or as `answered` marks). At most 8 open questions;

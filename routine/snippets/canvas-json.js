@@ -1,6 +1,8 @@
 // Read-only. Run on a Canvas API page (https://<canvas host>/api/v1/...) opened by navigation.
 // Lists the objects on the page, one per line, reduced to what matters for triage:
 //   type | course | id | title | date | state | path
+// A course listed with include[]=sections also shows "my sections": the sections the signed-in
+// person is enrolled in. The course's own name ends in a number for everyone and is not that.
 // Set ITEM to an object's id to read its text instead (an announcement's message, a
 // conversation's last message).
 (() => {
@@ -39,6 +41,7 @@
     const state = s
       ? ['submitted', 'graded', 'missing', 'late', 'excused'].filter((k) => s[k]).join(',') || 'not submitted'
       : (o.read_state || o.workflow_state || '');
+    const mine = Array.isArray(o.sections) ? o.sections.map((x) => clip(x && x.name, 40)).filter(Boolean).join(', ') : '';
     return [
       o.plannable_type || (o.course_code ? 'course' : o.context_code ? 'announcement' : o.subject != null ? 'conversation' : 'object'),
       o.course_id || o.context_code || o.course_code || '',
@@ -47,7 +50,7 @@
       p.due_at || o.due_at || p.todo_date || o.plannable_date || o.posted_at || o.last_message_at || o.start_at || '',
       state + (p.points_possible != null ? ` ${p.points_possible}pt` : '') + (o.new_activity ? ' new' : ''),
       String(o.html_url || '').replace(/[?#].*$/, '').replace(/^https?:\/\/[^/]+/, ''),
-    ].join(' | ');
+    ].join(' | ') + (mine ? ` | my sections: ${mine}` : '');
   });
   return page(`${location.origin}${location.pathname}\n${list.length} objects${list.length >= 100 ? ' (the list may continue on the next page)' : ''}\n${lines.join('\n')}`);
 })()

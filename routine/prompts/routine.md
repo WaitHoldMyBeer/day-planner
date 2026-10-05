@@ -84,6 +84,12 @@ Read these first, in this order.
    entered there. What the course requires is written in its syllabus and its schedule, and work
    handed in elsewhere (a form, a quiz before class, a reading response) often appears nowhere
    else. So, for every course, as its entry in `sources.md` describes:
+   - **Know which section the owner is in.** A course site keeps one shell for every lecture and
+     discussion section, and the shell's name ("..._001") is the same for every student: it is
+     not the owner's section. The course list gives the owner's own sections, and a local
+     enrollment record, if one is among the inputs, gives when and where they meet. When a
+     course document gives a date per section (a quiz in discussion, a lab, a sitting of an
+     exam), take the date for the owner's section and no other.
    - **Every run, list what the course links to.** It is one page per course.
    - **Read a document in full** when `memory/courses.md` holds no record of it, when the site
      says it changed after the recorded date, or when an announcement says it was posted or
@@ -104,12 +110,20 @@ Read these first, in this order.
    cannot, it goes in the brief's `questions` and in the coverage of that source as `partial`;
    writing it under `uncertain` alone is not enough. A lead is never carried to the next day
    without one of the two.
-6. **Record every candidate** you considered, including the ones you decide to drop, with the
+6. **Never present an assumption as a fact.** When an item's date, place or requirement depends on
+   something about the owner that you have not read in a source (their section, group, track or
+   role), look for it first: the site's enrollment data, the local inputs, `memory/courses.md`.
+   If it is still unknown, the item says so in its title ("date depends on your section"), gives
+   each alternative with its date in `why`, and the brief's summary does not state it as settled;
+   the question goes in `questions`. Writing "assumed" in one field while another states the
+   guess plainly is the same error. An open question in `questions.md` that bears on an item is
+   treated the same way until it is answered.
+7. **Record every candidate** you considered, including the ones you decide to drop, with the
    evidence and the reason. The mentor audits this file, so a dropped item with no reason is a defect.
-7. **Decide** for each candidate: `keep` (becomes a suggestion), `brief` (mentioned in the brief
+8. **Decide** for each candidate: `keep` (becomes a suggestion), `brief` (mentioned in the brief
    only), or `drop`.
-8. **De-duplicate** kept items against the planner, as described below.
-9. **Write the outputs**, then stop. The runner validates and sends them.
+9. **De-duplicate** kept items against the planner, as described below.
+10. **Write the outputs**, then stop. The runner validates and sends them.
 
 ## What counts as a candidate
 

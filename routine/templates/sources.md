@@ -41,7 +41,10 @@ from that date to today, rounded up, and at least 2.
 - site: `https://canvas.example.edu`
 - read with: Chrome. Navigate straight to the addresses below and run `snippets/canvas-json.js` on
   each.
-  1. Courses: `https://canvas.example.edu/api/v1/courses?enrollment_state=active&per_page=50`
+  1. Courses, with your own section in each:
+     `https://canvas.example.edu/api/v1/courses?enrollment_state=active&per_page=50&include[]=sections`
+     A course's name ends in a number such as `_001` for every student; that is the shell, not
+     your section. Yours is listed after "my sections".
   2. Work and announcements:
      `https://canvas.example.edu/api/v1/planner/items?start_date=<since date>&end_date=<today + 21 days>&per_page=100`
   3. Announcement text, only when a title does not settle what is asked:
