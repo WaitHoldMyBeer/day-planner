@@ -56,6 +56,20 @@ planner; each account is separate.
   event and unlocks the block. Deleting the block itself leaves the Google event alone.
 - Only the primary calendar is used. Edits made to a linked block later are not pushed back to Google.
 
+## Links and notes on blocks
+
+A block can carry a **link** to the thing it is about (an assignment page, a document) and a short
+**note** saying what that is. Open a block to edit both.
+
+- A block with a link shows an arrow button next to its lock. One click opens the link in a new tab;
+  the click does not start a drag or open the editor.
+- The note shows under the time on blocks of an hour or longer, and as the hover text on every block.
+  It is capped at 600 characters.
+- The link must start with `https://`. `http://` is accepted only for `localhost` and `127.0.0.1`, for
+  pages served by your own computer. Anything else is refused by the server.
+- **Add to Google** copies the note and the link into the event's description; the `.ics` and `.csv`
+  exports carry them too.
+
 ## Repeating tasks
 
 Open a task and pick days under **Repeat** (`S M T W T F S`). **At** sets a time or leaves it empty

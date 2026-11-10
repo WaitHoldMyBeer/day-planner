@@ -246,7 +246,10 @@ function buildICS(blocks, dateStr) {
   blocks.forEach((t) => {
     lines.push('BEGIN:VEVENT', `UID:${t.id}-${dateStr}@dayplanner`, `DTSTAMP:${stamp(dateStr, 0)}`,
       `DTSTART:${stamp(dateStr, t.start)}`, `DTEND:${stamp(dateStr, t.start + t.duration)}`,
-      `SUMMARY:${esc(t.name || 'Untitled')}`, 'END:VEVENT');
+      `SUMMARY:${esc(t.name || 'Untitled')}`);
+    if (t.note) lines.push(`DESCRIPTION:${esc(t.note)}`);
+    if (blockUrl(t.link)) lines.push(`URL:${blockUrl(t.link)}`);
+    lines.push('END:VEVENT');
   });
   lines.push('END:VCALENDAR');
   return lines.join('\r\n');
@@ -258,7 +261,7 @@ function buildCSV(blocks, dateStr) {
   const lines = ['Subject,Start Date,Start Time,End Date,End Time,All Day Event,Description'];
   [...blocks].sort((a, b) => a.start - b.start).forEach((t) => {
     const end = t.start + t.duration;
-    lines.push([q(t.name || 'Untitled'), csvDate(t.start), csvTime(t.start), csvDate(end), csvTime(end), 'False', q(t.tag ? `#${t.tag}` : '')].join(','));
+    lines.push([q(t.name || 'Untitled'), csvDate(t.start), csvTime(t.start), csvDate(end), csvTime(end), 'False', q([t.note || '', blockUrl(t.link) || '', t.tag ? `#${t.tag}` : ''].filter(Boolean).join(' '))].join(','));
   });
   return lines.join('\r\n');
 }
@@ -286,6 +289,22 @@ const EMPTY_ROUTINE = { enabled: false, keys: [], suggestions: [], brief: null }
 
 const txt = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\/\S+$/i.test(u) ? u : null);
+// A block's own link: https, or a page on this computer (http on localhost / 127.0.0.1).
+const NOTE_MAX = 600;
+const blockUrl = (u) => {
+  const s = typeof u === 'string' ? u.trim() : '';
+  return /^https:\/\/\S+$/i.test(s) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/\S*)?$/i.test(s) ? s : null;
+};
+// Keeps a block's link and note only when they hold something the server will accept.
+function tidyLinkNote(b) {
+  const out = { ...b };
+  const link = blockUrl(out.link);
+  const note = typeof out.note === 'string' ? out.note.trim().slice(0, NOTE_MAX) : '';
+  if (link) out.link = link; else delete out.link;
+  if (note) out.note = note; else delete out.note;
+  return out;
+}
+const linkLeftOut = (d) => typeof d.link === 'string' && d.link.trim() !== '' && !blockUrl(d.link);
 const listOf = (v) => (Array.isArray(v) ? v : []);
 function parseWhen(iso) {
   if (typeof iso !== 'string' || !iso) return null;
@@ -1394,11 +1413,12 @@ function Planner({ user, onSignOut }) {
     setBlockModal(null);
     if (!save) { if (m.mode === 'create') setBlocks(m.revertTo); return; }
     const d = m.draft;
-    const cleaned = { ...d, name: (d.name || '').trim() || 'Untitled', duration: Math.max(SNAP, d.duration) };
+    const cleaned = tidyLinkNote({ ...d, name: (d.name || '').trim() || 'Untitled', duration: Math.max(SNAP, d.duration) });
     const rest = blocksRef.current.filter((t) => t.id !== cleaned.id);
     const out = place([...rest, cleaned], cleaned.id);
     if (!out) { say('Those times collide with a locked block. Nothing changed.'); if (m.mode === 'create') setBlocks(m.revertTo); return; }
     commitBlocks(m.date, out);
+    if (linkLeftOut(d)) say('The link was left out. It must start with https://');
     if (m.mode === 'create' && cleaned.todoId) linkTodo(cleaned.todoId, m.date, cleaned.id);
   };
   const deleteBlock = (id) => {
@@ -1461,10 +1481,10 @@ function Planner({ user, onSignOut }) {
         summary: name,
         start: dayMinToDate(m.date, d.start).toISOString(),
         end: dayMinToDate(m.date, d.start + duration).toISOString(),
-        description: d.tag ? `#${d.tag}` : '',
+        description: [typeof d.note === 'string' ? d.note.trim() : '', blockUrl(d.link) || '', d.tag ? `#${d.tag}` : ''].filter(Boolean).join('\n'),
       });
       const ev = r.event;
-      const cleaned = { ...d, name, duration, locked: true, gcalId: ev.id };
+      const cleaned = tidyLinkNote({ ...d, name, duration, locked: true, gcalId: ev.id });
       if (ev.htmlLink) cleaned.gcalLink = ev.htmlLink;
       const rest = blocksRef.current.filter((t) => t.id !== cleaned.id);
       let out = place([...rest, cleaned], cleaned.id);
@@ -1862,8 +1882,8 @@ function Planner({ user, onSignOut }) {
                   const h = t.duration * PX;
                   const tight = t.duration < 45;
                   return html`
-                    <div key=${t.id} data-block-id=${t.id}
-                      className=${'block' + (t.locked ? ' locked' : '') + (draggingId === t.id ? ' dragging' : '') + (colorTarget === t.id ? ' target' : '')}
+                    <div key=${t.id} data-block-id=${t.id} title=${t.note || null}
+                      className=${'block' + (t.locked ? ' locked' : '') + (draggingId === t.id ? ' dragging' : '') + (colorTarget === t.id ? ' target' : '') + (blockUrl(t.link) ? ' haslink' : '')}
                       style=${{ top: t.start * PX, height: Math.max(h, 15), background: t.color, fontSize: tight ? 11 : 12, padding: tight ? '1px 7px' : '3px 7px', cursor: t.locked ? 'default' : draggingId === t.id ? 'grabbing' : 'grab' }}
                       onPointerDown=${(e) => startSession(e, { kind: 'block', id: t.id, mode: 'move', locked: !!t.locked })}>
                       ${!t.locked && html`
@@ -1871,9 +1891,13 @@ function Planner({ user, onSignOut }) {
                         <div className="hand b" onPointerDown=${(e) => { e.stopPropagation(); startSession(e, { kind: 'block', id: t.id, mode: 'bottom', immediate: true }); }}></div>`}
                       <button className=${'lk' + (t.locked ? ' on' : '')} title=${t.locked ? 'Unlock this block' : 'Lock this block in place'} aria-label=${t.locked ? 'Unlock' : 'Lock'}
                         onClick=${(e) => { e.stopPropagation(); toggleLock(t.id); }}>${t.locked ? html`<${Ico.lock} />` : html`<${Ico.unlock} />`}</button>
+                      ${blockUrl(t.link) && html`
+                        <a className="ln" href=${blockUrl(t.link)} target="_blank" rel="noopener noreferrer" title="Open the link" aria-label=${'Open the link for ' + (t.name || 'this block')}
+                          draggable=${false} onPointerDown=${(e) => e.stopPropagation()} onClick=${(e) => e.stopPropagation()}><${Ico.ext} /></a>`}
                       ${tight ? html`<div className="nm">${t.name || 'Untitled'} <span className="tnum" style=${{ fontWeight: 400, opacity: 0.85 }}>${fmt(t.start)}</span></div>` : html`
                         <div className="nm">${t.name || 'Untitled'}${t.tag ? html`<span className="tg">${t.tag}</span>` : null}${t.gcalId ? html`<span className="gm">G</span>` : null}${t.seriesDate ? html`<span className="gm rp" title="Repeating task"><${Ico.repeat} /></span>` : null}</div>
-                        <div className="tm tnum">${fmt(t.start)} – ${fmt(t.start + t.duration)}</div>`}
+                        <div className="tm tnum">${fmt(t.start)} – ${fmt(t.start + t.duration)}</div>
+                        ${t.note && t.duration >= 60 ? html`<div className="nt">${t.note}</div>` : null}`}
                     </div>`;
                 })}
                 ${ghost && html`<div className="ghost tnum" style=${{ top: ghost.start * PX, height: Math.max(ghost.duration * PX, 16) }}>${ghost.label ? ghost.label + ' · ' : ''}${fmt(ghost.start)} – ${fmt(ghost.start + ghost.duration)}</div>`}
@@ -2005,6 +2029,15 @@ function BlockModal({ modal, colors, todo, google, gBusy, onChange, onCancel, on
               </span>
             </div>`}
           <div className="field"><input ref=${inputRef} id="blockname" className="text" placeholder="Add a title" value=${d.name} onChange=${(e) => onChange({ name: e.target.value })} onKeyDown=${(e) => e.key === 'Enter' && onSave()} /></div>
+          <div className="field"><label htmlFor="blocknote">Note</label>
+            <textarea id="blocknote" className="inp area" rows="2" maxLength=${NOTE_MAX} placeholder="What this block is for" value=${d.note || ''} onChange=${(e) => onChange({ note: e.target.value })}></textarea>
+          </div>
+          <div className="field"><label htmlFor="blocklink">Link</label>
+            <div className="linkrow">
+              <input id="blocklink" className="inp" type="url" inputMode="url" autoComplete="off" spellCheck=${false} placeholder="https://…" value=${d.link || ''} onChange=${(e) => onChange({ link: e.target.value })} onKeyDown=${(e) => e.key === 'Enter' && onSave()} />
+              ${blockUrl(d.link) && html`<a className="btn" href=${blockUrl(d.link)} target="_blank" rel="noopener noreferrer"><${Ico.ext} /> Open</a>`}
+            </div>
+          </div>
           <div className="field"><span className="lbl">Length · ${durLabel(d.duration)}</span>
             <div className="chips">${DUR_CHIPS.map((m) => html`<button key=${m} className=${'chipbtn' + (d.duration === m ? ' on' : '')} onClick=${() => setDur(m)}>${durLabel(m)}</button>`)}</div>
           </div>

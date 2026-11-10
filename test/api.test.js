@@ -188,6 +188,32 @@ test('blocks keep seriesDate and seriesVersion', async () => {
   assert.equal(r.status, 400);
 });
 
+test('blocks keep a link and a note, and refuse links that are not web addresses', async () => {
+  const base0 = { id: 'b10', name: 'HW5', start: 600, duration: 90, color: '#039BE5', locked: false };
+  const blocks = [
+    { ...base0, link: ' https://www.gradescope.com/courses/1/assignments/2 ', note: '  Five problems.\n\n\n\nOne PDF, pages assigned.  ' },
+    { ...base0, id: 'b11', start: 700, link: 'http://127.0.0.1:8745/plan.html', note: '' },
+    { ...base0, id: 'b12', start: 800 },
+  ];
+  let r = await call('PUT', '/api/days/2026-10-06', { blocks, rev: 'rev0401' });
+  assert.equal(r.status, 200);
+  r = await call('GET', '/api/days/2026-10-06');
+  const [a, b, c] = r.json.day.blocks;
+  assert.equal(a.link, 'https://www.gradescope.com/courses/1/assignments/2');
+  assert.equal(a.note, 'Five problems.\n\nOne PDF, pages assigned.');
+  assert.equal(b.link, 'http://127.0.0.1:8745/plan.html');
+  assert.equal('note' in b, false);
+  assert.equal('link' in c, false);
+  for (const link of ['javascript:alert(1)', 'http://example.com/x', 'ftp://example.com/x', 'not a link', 42]) {
+    r = await call('PUT', '/api/days/2026-10-06', { blocks: [{ ...base0, link }], rev: 'rev0402' });
+    assert.equal(r.status, 400, `link ${link} must be refused`);
+  }
+  r = await call('PUT', '/api/days/2026-10-06', { blocks: [{ ...base0, note: 'x'.repeat(5000) }], rev: 'rev0403' });
+  assert.equal(r.status, 200);
+  r = await call('GET', '/api/days/2026-10-06');
+  assert.equal(r.json.day.blocks[0].note.length, 600);
+});
+
 test('settings round trip', async () => {
   let r = await call('PUT', '/api/settings', { colors: ['#112233', 'nothex', '#ABCDEF'], rev: 'rev0005' });
   assert.equal(r.status, 200);

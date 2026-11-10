@@ -220,6 +220,15 @@ button { cursor:pointer; }
 .block .lk { position:absolute; top:2px; right:2px; width:22px; height:22px; border:0; background:transparent; color:#fff; opacity:.5;
   padding:4px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
 .block .lk svg { width:14px; height:14px; }
+.block .ln { position:absolute; top:2px; right:26px; width:22px; height:22px; color:#fff; opacity:.85; padding:4px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.22); cursor:pointer; touch-action:manipulation; }
+.block .ln svg { width:14px; height:14px; }
+.block .ln:hover, .block .ln:focus-visible { opacity:1; background:rgba(0,0,0,.4); }
+.block.haslink .nm { padding-right:48px; }
+.block .nt { opacity:.92; line-height:1.3; margin-top:2px; overflow:hidden; white-space:normal; overflow-wrap:anywhere; }
+.linkrow { display:flex; gap:8px; align-items:center; }
+.linkrow .inp { flex:1; min-width:0; }
+.inp.area { height:auto; min-height:56px; padding:7px 9px; resize:vertical; font:inherit; line-height:1.35; }
 .block:hover .lk { opacity:.9; }
 .block .lk.on { opacity:1; background:rgba(0,0,0,.25); }
 .hand { position:absolute; left:0; right:0; height:9px; cursor:ns-resize; z-index:2; touch-action:none; }
